@@ -7,8 +7,10 @@ import dev.openrune.types.ItemServerType
 import dev.openrune.types.NpcServerType
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
+import java.awt.GridLayout
 import java.awt.Insets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -62,6 +64,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private val loadSelectedShopButton = JButton("Load selected shop")
     private val loadSavedShopButton = JButton("Load saved shop")
     private val parseCoordsButton = JButton("Parse pasted coords")
+    private val saveShopButton = JButton("Save shop")
     private val modeInfo = JLabel()
     private val npcHint = JLabel()
 
@@ -174,18 +177,20 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         removeStock.addActionListener { removeSelectedStockRow() }
         val makePreview = JButton("Preview")
         makePreview.addActionListener { previewShop() }
-        val place = JButton("Place shop")
-        place.addActionListener { placeShop() }
+        saveShopButton.addActionListener { placeShop() }
 
-        val actions = JPanel()
-        actions.add(loadSelectedShopButton)
-        actions.add(loadSavedShopButton)
-        actions.add(Box.createHorizontalStrut(8))
-        actions.add(parseCoordsButton)
-        actions.add(Box.createHorizontalStrut(8))
-        actions.add(removeStock)
-        actions.add(makePreview)
-        actions.add(place)
+        val actions = JPanel(GridLayout(2, 1, 0, 4))
+        val loadActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
+        loadActions.add(loadSelectedShopButton)
+        loadActions.add(loadSavedShopButton)
+
+        val editActions = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0))
+        editActions.add(parseCoordsButton)
+        editActions.add(removeStock)
+        editActions.add(makePreview)
+        editActions.add(saveShopButton)
+        actions.add(loadActions)
+        actions.add(editActions)
 
         val stockTable = JTable(stockModel)
         stockTable.fillsViewportHeight = true
@@ -237,6 +242,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         recreateExistingButton.isEnabled = custom
         createCustomButton.isEnabled = !custom
         parseCoordsButton.isEnabled = custom
+        saveShopButton.text = if (custom) "Place shop" else "Save shop"
         worldX.isEnabled = custom
         worldY.isEnabled = custom
         level.isEnabled = custom
@@ -504,14 +510,14 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
                 if (spec.spawnNpc) {
                     "Placed ${spec.shopTitle}. Rebuild cache/map data and restart server before testing."
                 } else {
-                    "Placed ${spec.shopTitle}. Restart server before testing."
+                    "Saved ${spec.shopTitle}. Restart server before testing."
                 }
             JOptionPane.showMessageDialog(
                 this,
                 if (spec.spawnNpc) {
                     "Shop placed. Rebuild cache/map data with :or-cache:buildCache, then restart the server."
                 } else {
-                    "Shop placed. Restart the server before testing."
+                    "Shop saved. Restart the server before testing."
                 },
             )
         } catch (e: Exception) {
