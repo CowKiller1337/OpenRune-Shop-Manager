@@ -1,6 +1,7 @@
 package org.rsmod.tools.shopmaker
 
 import dev.openrune.ServerCacheManager
+import dev.openrune.gamevals.GameValProvider
 import dev.openrune.rscm.RSCM
 import dev.openrune.rscm.RSCMType
 import dev.openrune.types.ItemServerType
@@ -188,10 +189,10 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         val loadActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
         loadActions.add(loadSelectedShopButton)
 
-        val editActions = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0))
-        editActions.add(removeStock)
-        editActions.add(makePreview)
+        val editActions = JPanel(GridLayout(1, 3, 8, 0))
         editActions.add(saveShopButton)
+        editActions.add(makePreview)
+        editActions.add(removeStock)
         actions.add(loadActions)
         actions.add(editActions)
 
@@ -1202,10 +1203,13 @@ private fun NpcServerType.toLookupEntry(
 }
 
 private fun loadServerCache(repoRoot: Path) {
+    val root = repoRoot.toAbsolutePath().normalize()
     val previousUserDir = System.getProperty("user.dir")
     try {
-        System.setProperty("user.dir", repoRoot.toString())
-        ServerCacheManager.init(239)
+        val rootPrefix = root.toString().replace('\\', '/') + "/"
+        GameValProvider.load(rootPrefix)
+        System.setProperty("user.dir", root.toString())
+        ServerCacheManager.init(root.resolve(".data").resolve("cache").resolve("SERVER"), 239)
     } finally {
         System.setProperty("user.dir", previousUserDir)
     }
