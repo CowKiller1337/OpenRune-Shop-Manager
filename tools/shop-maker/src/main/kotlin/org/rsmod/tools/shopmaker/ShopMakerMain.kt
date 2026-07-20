@@ -535,6 +535,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
             inheritedNpc = selectedNpc,
             coord = coord,
             spawnNpc = shouldSpawnNpc,
+            rawShopInternal = if (shouldSpawnNpc) null else selectedNpc.scriptedShopInternal,
             buyMultiplier = buyMultiplier.value as Int,
             sellMultiplier = sellMultiplier.value as Int,
             changeDelta = changeDelta.value as Int,
@@ -603,6 +604,7 @@ private data class LookupEntry(
     val shopSellMultiplier: Int? = null,
     val shopChangeDelta: Int? = null,
     val shopStock: List<RawStockEntry> = emptyList(),
+    val scriptedShopInternal: String? = null,
     val cost: Int = 0,
 ) {
     val isExistingShopNpc: Boolean
@@ -717,6 +719,7 @@ private data class ShopSpec(
     val inheritedNpc: LookupEntry,
     val coord: WorldCoord?,
     val spawnNpc: Boolean,
+    val rawShopInternal: String?,
     val buyMultiplier: Int,
     val sellMultiplier: Int,
     val changeDelta: Int,
@@ -746,11 +749,16 @@ private data class GeneratedFiles(
     val npcToml: String,
     val spawnToml: String?,
     val invGameval: String,
+    val rawShopInternal: String?,
+    val rawShopToml: String?,
 ) {
     fun preview(): String =
         buildString {
             appendLine("----- NPC mode -----")
-            if (coord == null) {
+            if (rawShopInternal != null) {
+                appendLine("Updates scripted shop inventory: $rawShopInternal")
+                appendLine("No new NPC spawn or click handler.")
+            } else if (coord == null) {
                 appendLine("Patches existing visible NPC type: no new NPC spawn.")
             } else {
                 appendLine("Spawns visible NPC copy at:")
@@ -759,16 +767,25 @@ private data class GeneratedFiles(
             }
             appendLine()
             appendLine("----- .data/raw-cache/server/shops/custom_shops.toml -----")
-            appendLine(shopToml)
+            appendLine(if (rawShopToml == null) shopToml else "No generated inventory block.")
             appendLine("----- .data/raw-cache/server/custom_shop_npcs.toml -----")
-            appendLine(npcToml)
+            appendLine(if (rawShopToml == null) npcToml else "No generated NPC block.")
             appendLine("----- .data/raw-cache/map/npcs/custom_shops.toml -----")
             appendLine(spawnToml ?: "No new NPC spawn.")
+            if (rawShopToml != null) {
+                appendLine("----- existing shop inventory -----")
+                appendLine(rawShopToml)
+            }
             appendLine("----- .data/gamevals/inv.rscm -----")
-            appendLine(invGameval)
+            appendLine(if (rawShopToml == null) invGameval else "No generated gameval.")
         }
 
     fun write(root: Path) {
+        if (rawShopInternal != null && rawShopToml != null) {
+            writeRawShop(root, rawShopInternal, rawShopToml)
+            removeGeneratedShop(root, marker)
+            return
+        }
         upsertManagedBlock(root.resolve(CUSTOM_SHOPS_TOML), marker, shopToml)
         upsertManagedBlock(root.resolve(CUSTOM_SHOP_NPCS_TOML), marker, npcToml)
         if (spawnToml != null) {
@@ -869,36 +886,27 @@ private fun buildGeneratedFiles(spec: ShopSpec): GeneratedFiles {
     val invKey = spec.invInternal.removePrefix("inv.")
     val existingInvGameval = existingGameval(Paths.get(INV_GAMEVALS), invKey)?.takeIf { it in INV_CUSTOM_ID_RANGE }
 
+    val rawShopToml =
+        spec.rawShopInternal?.let { rawInternal ->
+            buildShopInventoryToml(
+                invInternal = rawInternal,
+                title = spec.shopTitle,
+                buyMultiplier = spec.buyMultiplier,
+                sellMultiplier = spec.sellMultiplier,
+                changeDelta = spec.changeDelta,
+                stock = spec.stock,
+            )
+        }
+
     val shopToml =
-        buildString {
-            appendLine("[[inventory]]")
-            appendLine("isServerOnly = true")
-            appendLine("id = ${spec.invInternal.tomlString()}")
-            appendLine("name = ${spec.shopTitle.tomlString()}")
-            appendLine()
-            appendLine("scope = \"Shared\"")
-            appendLine("stack = \"Always\"")
-            appendLine()
-            appendLine("sellMultiplier = ${spec.sellMultiplier}")
-            appendLine("buyMultiplier = ${spec.buyMultiplier}")
-            appendLine("delta = ${spec.changeDelta}")
-            appendLine()
-            appendLine("size = ${max(spec.stock.size, 1)}")
-            appendLine()
-            appendLine("protect = false")
-            appendLine("runWeight = false")
-            appendLine("restock = true")
-            appendLine("allStock = false")
-            appendLine("placeholders = false")
-            appendLine()
-            spec.stock.forEach { entry ->
-                appendLine("[[inventory.stock]]")
-                appendLine("obj = ${entry.item.internal.tomlString()}")
-                appendLine("count = ${entry.count}")
-                appendLine("restockCycles = ${entry.restockCycles}")
-                appendLine()
-            }
-        }.trimEnd()
+        buildShopInventoryToml(
+            invInternal = spec.invInternal,
+            title = spec.shopTitle,
+            buyMultiplier = spec.buyMultiplier,
+            sellMultiplier = spec.sellMultiplier,
+            changeDelta = spec.changeDelta,
+            stock = spec.stock,
+        )
 
     val npcToml =
         buildString {
@@ -935,8 +943,48 @@ private fun buildGeneratedFiles(spec: ShopSpec): GeneratedFiles {
         npcToml = npcToml,
         spawnToml = spawnToml,
         invGameval = invGameval,
+        rawShopInternal = spec.rawShopInternal,
+        rawShopToml = rawShopToml,
     )
 }
+
+private fun buildShopInventoryToml(
+    invInternal: String,
+    title: String,
+    buyMultiplier: Int,
+    sellMultiplier: Int,
+    changeDelta: Int,
+    stock: List<StockEntry>,
+): String =
+    buildString {
+        appendLine("[[inventory]]")
+        appendLine("isServerOnly = true")
+        appendLine("id = ${invInternal.tomlString()}")
+        appendLine("name = ${title.tomlString()}")
+        appendLine()
+        appendLine("scope = \"Shared\"")
+        appendLine("stack = \"Always\"")
+        appendLine()
+        appendLine("sellMultiplier = $sellMultiplier")
+        appendLine("buyMultiplier = $buyMultiplier")
+        appendLine("delta = $changeDelta")
+        appendLine()
+        appendLine("size = ${max(stock.size, 1)}")
+        appendLine()
+        appendLine("protect = false")
+        appendLine("runWeight = false")
+        appendLine("restock = true")
+        appendLine("allStock = false")
+        appendLine("placeholders = false")
+        appendLine()
+        stock.forEach { entry ->
+            appendLine("[[inventory.stock]]")
+            appendLine("obj = ${entry.item.internal.tomlString()}")
+            appendLine("count = ${entry.count}")
+            appendLine("restockCycles = ${entry.restockCycles}")
+            appendLine()
+        }
+    }.trimEnd()
 
 private fun findGeneratedShopAt(root: Path, coord: WorldCoord, currentMarker: String): ExistingGeneratedShop? {
     val file = root.resolve(CUSTOM_SHOP_SPAWNS_TOML)
@@ -1043,6 +1091,38 @@ private fun removeGeneratedShop(root: Path, marker: String) {
     }
     removeGameval(root.resolve(NPC_GAMEVALS), marker)
     removeGameval(root.resolve(INV_GAMEVALS), marker)
+}
+
+private fun writeRawShop(root: Path, invInternal: String, block: String) {
+    val file = findRawShopFile(root, invInternal)
+        ?: error("Could not find the raw shop file for $invInternal.")
+    val text = Files.readString(file)
+    val inventoryPattern = Regex("""(?s)\[\[inventory]](.*?)(?=\R\[\[inventory]]|\z)""")
+    var replaced = false
+    val next =
+        inventoryPattern.replace(text) { match ->
+            val current = match.value
+            if (tomlStringValue(current, "id") == invInternal) {
+                replaced = true
+                block.trimEnd()
+            } else {
+                current
+            }
+        }
+    require(replaced) { "Could not replace the raw shop block for $invInternal." }
+    Files.writeString(file, next.trimEnd() + "\n")
+}
+
+private fun findRawShopFile(root: Path, invInternal: String): Path? {
+    val dir = root.resolve(RAW_SHOPS_DIR)
+    if (!Files.isDirectory(dir)) {
+        return null
+    }
+    Files.walk(dir).use { paths ->
+        return paths.iterator().asSequence()
+            .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".toml") }
+            .firstOrNull { file -> inventoryBlocks(Files.readString(file)).any { tomlStringValue(it, "id") == invInternal } }
+    }
 }
 
 private fun upsertManagedBlock(file: Path, marker: String, block: String) {
@@ -1219,20 +1299,46 @@ private fun loadScriptedShopLinks(root: Path, rawShopIndex: RawShopIndex): Map<S
     val npcPattern = Regex("""onOpNpc\d\s*\(\s*"([^"]+)"""")
     val shopOpenPattern =
         Regex("""shops\.open\s*\((?s:.*?)"[^"]+"\s*,\s*"(inv\.[^"]+)"""")
+    val invLiteralPattern = Regex(""""(inv\.[^"]+)"""")
     Files.walk(contentDir).use { paths ->
         paths.iterator().asSequence()
             .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".kt") }
             .forEach { file ->
                 val text = Files.readString(file)
                 val npcs = npcPattern.findAll(text).map { it.groupValues[1] }.filter { it.startsWith("npc.") }.toSet()
-                val shopInvs = shopOpenPattern.findAll(text).map { it.groupValues[1] }.toSet()
-                if (npcs.isNotEmpty() && shopInvs.size == 1) {
-                    val shop = rawShopIndex.byInternal(shopInvs.single()) ?: return@forEach
+                val directShopInvs = shopOpenPattern.findAll(text).map { it.groupValues[1] }.toSet()
+                val shopInvs =
+                    if (directShopInvs.isNotEmpty()) {
+                        directShopInvs
+                    } else {
+                        invLiteralPattern.findAll(text).map { it.groupValues[1] }.toSet()
+                    }
+                if (npcs.isNotEmpty() && shopInvs.isNotEmpty()) {
+                    val shop = chooseScriptedShop(shopInvs.mapNotNull(rawShopIndex::byInternal)) ?: return@forEach
                     npcs.forEach { npc -> links.putIfAbsent(npc, shop) }
                 }
             }
     }
     return links
+}
+
+private fun chooseScriptedShop(shops: List<ShopInventoryInfo>): ShopInventoryInfo? {
+    val distinct = shops.distinctBy { it.internal }
+    if (distinct.isEmpty()) {
+        return null
+    }
+    if (distinct.size == 1) {
+        return distinct.single()
+    }
+    val titleGroups = distinct.groupBy { shopSearchKey(it.title) }
+    if (titleGroups.size != 1) {
+        return null
+    }
+    return distinct.sortedWith(
+        compareBy<ShopInventoryInfo> { "skillcape" in it.internal }
+            .thenBy { it.internal.length }
+            .thenBy { it.internal },
+    ).first()
 }
 
 private fun gamevalId(file: Path, key: String): Int? = existingGameval(file, key)
@@ -1270,9 +1376,10 @@ private fun NpcServerType.toLookupEntry(
     val hasTrade = ops.any { it.substringAfter(':').equals("trade", ignoreCase = true) }
     val paramShopInventoryId = paramsRaw?.get(shopParams.inventory).asParamInt()
     val paramShopInventoryInternal = paramShopInventoryId?.let { safeReverseMapping(RSCMType.INV, it) }
+    val scriptedShop = scriptedShopLinks[internal]
     val linkedShop =
         rawShopIndex.byInternal(paramShopInventoryInternal)
-            ?: scriptedShopLinks[internal]
+            ?: scriptedShop
             ?: rawShopIndex.matchNpc(name, internal)
     val shopInventoryId =
         paramShopInventoryId ?: linkedShop?.internal?.let { runCatching { RSCM.getRSCM(it) }.getOrNull() }
@@ -1292,6 +1399,7 @@ private fun NpcServerType.toLookupEntry(
         shopSellMultiplier = paramsRaw?.get(shopParams.sellPercentage).asParamInt() ?: linkedShop?.sellMultiplier,
         shopChangeDelta = paramsRaw?.get(shopParams.changePercentage).asParamInt() ?: linkedShop?.changeDelta,
         shopStock = linkedShop?.stock.orEmpty(),
+        scriptedShopInternal = scriptedShop?.internal,
     )
 }
 
