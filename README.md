@@ -13,7 +13,7 @@ parameter by hand. It is designed as a drop-in Gradle module for an OpenRune ser
 - Create custom shop NPC copies at pasted world coordinates.
 - Reload generated shops and edit them later.
 - Load the stock from a selected existing shop NPC.
-- Installs the small server-side support files it needs on first launch.
+- Generates normal OpenRune shop scripts for newly placed custom shops.
 
 ## Install
 
@@ -87,7 +87,8 @@ mode only changes the shop title, prices, and stock. It does not move the NPC. I
 at different coordinates, use **Create custom**.
 
 Use **Create custom** when you want to place a new shop NPC copy. Enter the world X/Y/level, build
-the stock, and place the shop.
+the stock, and place the shop. The tool creates a unique `npc.custom_shop_*` type and a small
+Aubury-style `PluginScript` that calls `shops.open(...)`.
 
 To edit instead of starting over:
 
@@ -102,6 +103,11 @@ Generated shops are written as marked blocks to:
 - `.data/raw-cache/server/custom_shop_npcs.toml`
 - `.data/raw-cache/map/npcs/custom_shops.toml`
 - `.data/gamevals/inv.rscm`
+- `.data/gamevals/npc.rscm`
+- `content/generic/generic-npcs/src/main/kotlin/org/rsmod/content/generic/npcs/shops/generated`
+
+Existing shop edits update the native `inv.*` shop TOML directly instead of installing a custom
+shop runtime handler.
 
 Existing shop edits usually only need a server restart. Newly spawned custom shop NPCs need a cache
 or map rebuild before restarting:
