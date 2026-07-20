@@ -19,3 +19,5 @@ tools/shop-manager-intellij/build/distributions
 ```
 
 Install it through IntelliJ IDEA with **Settings > Plugins > Install Plugin from Disk...**.
+After restarting IntelliJ, open an OpenRune server project and use the right-side
+**OpenRune Shops** tool window.

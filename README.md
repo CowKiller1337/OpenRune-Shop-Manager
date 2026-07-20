@@ -1,9 +1,9 @@
 # OpenRune Shop Manager
 
-A desktop shop editor for OpenRune server projects.
+A desktop and IntelliJ shop editor for OpenRune server projects.
 
-The tool helps create and edit shop definitions without manually writing every inventory and NPC
-parameter by hand. It is designed as a drop-in Gradle module for an OpenRune server checkout.
+The tool edits existing native OpenRune shops without manually writing every inventory parameter by
+hand. It is designed as a drop-in Gradle module for an OpenRune server checkout.
 
 ## Features
 
@@ -80,14 +80,18 @@ has the expected OpenRune data folders.
 
 ## How To Use
 
-Use **Recreate existing** when you want to change a shop that already exists in the world. This
-mode changes the shop title, prices, and stock. If the selected NPC has shop stock but no native
-Trade script, the tool also writes a normal Aubury-style `PluginScript` that calls `shops.open(...)`.
-It does not move the NPC and does not create new NPC definitions.
+Use the tool when you want to change a shop that already exists in the world. It changes the shop
+title, prices, and stock. If the selected NPC has shop stock but no native Trade script, the tool
+also writes a normal Aubury-style `PluginScript` that calls `shops.open(...)`. It does not move the
+NPC and does not create new NPC definitions.
 
-To edit instead of starting over:
+Basic flow:
 
 - Pick an NPC and press **Load selected shop** to pull its current stock into the form.
+- Search items and add/remove stock rows.
+- Press **Preview** if you want to inspect the generated changes.
+- Press **Save / Fix shop** to write the native shop update.
+- Rebuild cache with `:or-cache:buildCache`, then restart the server.
 
 ## Output Files
 
@@ -106,7 +110,7 @@ If that generated script is needed, the tool may also add the normal shops API d
 The tool does not write generated inventory/NPC definition files and does not install a custom
 shop runtime handler.
 
-After saving a shop stock change, rebuild the cache and restart the server:
+After pressing **Save / Fix shop**, rebuild the cache and restart the server:
 
 ```powershell
 .\gradlew.bat --no-daemon :or-cache:buildCache

@@ -14,9 +14,13 @@ It changes the shop title, stock, and prices; if the NPC is missing a native Tra
 a normal Aubury-style `PluginScript` for that NPC. It does not move the NPC or create a new NPC
 definition.
 
-To edit instead of starting over:
+Basic flow:
 
 - Pick an NPC and press **Load selected shop** to pull its current shop stock into the form.
+- Search items and add/remove stock rows.
+- Press **Preview** if you want to inspect the generated changes.
+- Press **Save / Fix shop** to write the native shop update.
+- Rebuild cache with `:or-cache:buildCache`, then restart the server.
 
 Existing shop edits update the matching native shop TOML under:
 
@@ -29,7 +33,7 @@ When a missing Trade click must be repaired, the tool writes a normal OpenRune s
 The tool does not write generated inventory/NPC definition files and does not install a custom
 shop runtime handler.
 
-After saving a shop stock change, rebuild the cache and restart the server:
+After pressing **Save / Fix shop**, rebuild the cache and restart the server:
 
 ```powershell
 .\gradlew.bat --no-daemon :or-cache:buildCache
