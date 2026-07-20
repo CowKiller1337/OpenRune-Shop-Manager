@@ -274,9 +274,9 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 "<html><b>Create custom:</b> choose a Trade-capable NPC model, add stock, enter the " +
                     "world X/Y/level where the new shop copy should stand, then rebuild cache/map data and restart.</html>"
             } else {
-                "<html><b>Recreate existing:</b> choose an in-world shop NPC. This only changes the " +
-                    "shop stock, title, and prices. It does not move the NPC. Use Create custom if " +
-                    "you want a different location.</html>"
+                "<html><b>Recreate existing:</b> choose an in-world shop NPC. This saves the shop stock " +
+                    "and repairs the Trade click with a normal OpenRune shop script when one is missing. " +
+                    "It does not move the NPC.</html>"
             }
     }
 
@@ -289,12 +289,12 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 val spawnedNpcRegions = loadSpawnedNpcRegions(repoRoot)
                 val shopParams = ShopParamIds.load(repoRoot)
                 val rawShopIndex = loadRawShopIndex(repoRoot)
-                val scriptedShopLinks = loadScriptedShopLinks(repoRoot, rawShopIndex)
+                val scriptedNpcIndex = loadScriptedNpcIndex(repoRoot, rawShopIndex)
                 val regions = spawnedNpcRegions.values.flatten().distinct().sorted()
                 return LookupData(
                     npcs = ServerCacheManager.getNpcs().values
                         .mapNotNull {
-                            it.toLookupEntry(spawnedNpcRegions, shopParams, rawShopIndex, scriptedShopLinks)
+                            it.toLookupEntry(spawnedNpcRegions, shopParams, rawShopIndex, scriptedNpcIndex)
                         }
                         .sortedWith(
                             compareBy<LookupEntry> { !it.isExistingShopNpc }
@@ -569,6 +569,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             coord = coord,
             spawnNpc = shouldSpawnNpc,
             rawShopInternal = if (shouldSpawnNpc) null else selectedNpc.shopInventoryInternal ?: selectedNpc.scriptedShopInternal,
+            writeNativeScript = shouldSpawnNpc || (selectedNpc.scriptedShopInternal == null && !selectedNpc.hasNativeTradeScript),
             buyMultiplier = buyMultiplier.value as Int,
             sellMultiplier = sellMultiplier.value as Int,
             changeDelta = changeDelta.value as Int,
@@ -642,6 +643,7 @@ private data class LookupEntry(
     val shopChangeDelta: Int? = null,
     val shopStock: List<RawStockEntry> = emptyList(),
     val scriptedShopInternal: String? = null,
+    val hasNativeTradeScript: Boolean = false,
     val cost: Int = 0,
 ) {
     val canOpenShop: Boolean
@@ -675,9 +677,10 @@ private data class LookupEntry(
         get() {
             val actionText = if (actions.isBlank()) "" else " | $actions"
             val scriptText = if (!hasTrade && scriptedShopInternal != null) " | scripted shop" else ""
+            val tradeScriptText = if (hasTrade && hasNativeTradeScript) " | native Trade script" else ""
             val regionText = if (regionLabel.isBlank()) "" else " | $regionLabel"
             val costText = if (cost > 0) " | ${cost}gp" else ""
-            return "$name [$id] $internal$regionText$actionText$scriptText$costText"
+            return "$name [$id] $internal$regionText$actionText$scriptText$tradeScriptText$costText"
         }
 
     fun matches(query: String): Boolean {
@@ -710,6 +713,27 @@ private data class ShopInventoryInfo(
     val changeDelta: Int,
     val stock: List<RawStockEntry>,
 )
+
+private data class ScriptedNpcIndex(
+    val shopLinks: Map<String, ShopInventoryInfo>,
+    val opPatterns: List<NpcOpPattern>,
+) {
+    fun hasOp(npcInternal: String, opSlot: Int): Boolean =
+        opPatterns.any { it.opSlot == opSlot && it.matches(npcInternal) }
+}
+
+private data class NpcOpPattern(
+    val opSlot: Int,
+    val npcPattern: String,
+) {
+    fun matches(npcInternal: String): Boolean {
+        if ('$' !in npcPattern) {
+            return npcPattern == npcInternal
+        }
+        val prefix = npcPattern.substringBefore('$')
+        return prefix.isNotBlank() && npcInternal.startsWith(prefix)
+    }
+}
 
 private data class RawShopIndex(
     val byInternal: Map<String, ShopInventoryInfo>,
@@ -807,14 +831,24 @@ private data class ShopSpec(
     val coord: WorldCoord?,
     val spawnNpc: Boolean,
     val rawShopInternal: String?,
+    val writeNativeScript: Boolean,
     val buyMultiplier: Int,
     val sellMultiplier: Int,
     val changeDelta: Int,
     val stock: List<StockEntry>,
 ) {
     val invInternal: String get() = "inv.custom_shop_$slug"
+    val openInvInternal: String get() = rawShopInternal ?: invInternal
     val npcInternal: String get() = if (spawnNpc) "npc.$marker" else inheritedNpc.internal
     val marker: String get() = "custom_shop_$slug"
+    val scriptMarker: String
+        get() =
+            if (spawnNpc) {
+                marker
+            } else {
+                "existing_shop_${inheritedNpc.internal.removePrefix("npc.").toSlug()}_" +
+                    openInvInternal.removePrefix("inv.").toSlug()
+            }
 }
 
 private data class WorldCoord(val x: Int, val y: Int, val level: Int) {
@@ -847,7 +881,13 @@ private data class GeneratedFiles(
             appendLine("----- NPC mode -----")
             if (rawShopInternal != null) {
                 appendLine("Updates native shop inventory: $rawShopInternal")
-                appendLine("No new NPC spawn or click handler.")
+                appendLine(
+                    if (nativeScript != null) {
+                        "Repairs the existing NPC Trade click with a native OpenRune shop script."
+                    } else {
+                        "Uses the existing native OpenRune Trade script."
+                    },
+                )
             } else if (coord == null) {
                 appendLine("Patches existing visible NPC type: no new NPC spawn.")
             } else {
@@ -881,7 +921,14 @@ private data class GeneratedFiles(
         if (rawShopInternal != null && rawShopToml != null) {
             writeRawShop(root, rawShopInternal, rawShopToml)
             removeGeneratedShop(root, marker)
+            if (nativeScriptPath != null && nativeScript != null) {
+                writeNativeShopScript(root.resolve(nativeScriptPath), nativeScript)
+                ensureGradleDependency(root.resolve(GENERIC_NPCS_BUILD_FILE), SHOPS_API_DEPENDENCY)
+            }
             return
+        }
+        if (!ensureInventoryCodecCompatibility(root)) {
+            error("Compatibility fix was not installed.")
         }
         upsertManagedBlock(root.resolve(CUSTOM_SHOPS_TOML), marker, shopToml)
         if (npcToml != null) {
@@ -1056,9 +1103,9 @@ private fun buildGeneratedFiles(spec: ShopSpec): GeneratedFiles {
         } else {
             null
         }
-    val nativeScriptPath = if (spec.spawnNpc) nativeShopScriptPath(spec.marker) else null
+    val nativeScriptPath = if (spec.writeNativeScript) nativeShopScriptPath(spec.scriptMarker) else null
     val nativeScript =
-        if (spec.spawnNpc) {
+        if (spec.writeNativeScript) {
             buildNativeShopScript(spec, spec.inheritedNpc.tradeOpSlot ?: DEFAULT_TRADE_SLOT)
         } else {
             null
@@ -1137,7 +1184,7 @@ private fun buildNativeShopScript(spec: ShopSpec, tradeSlot: Int): String {
         appendLine("    }")
         appendLine()
         appendLine("    private fun Player.$openFunction(npc: Npc) {")
-        appendLine("        shops.open(this, npc, ${spec.shopTitle.kotlinString()}, ${spec.invInternal.kotlinString()})")
+        appendLine("        shops.open(this, npc, ${spec.shopTitle.kotlinString()}, ${spec.openInvInternal.kotlinString()})")
         appendLine("    }")
         appendLine("}")
     }.trimEnd()
@@ -1472,13 +1519,14 @@ private fun rawInventoryStockRows(block: String): List<RawStockEntry> {
         .toList()
 }
 
-private fun loadScriptedShopLinks(root: Path, rawShopIndex: RawShopIndex): Map<String, ShopInventoryInfo> {
+private fun loadScriptedNpcIndex(root: Path, rawShopIndex: RawShopIndex): ScriptedNpcIndex {
     val contentDir = root.resolve("content")
     if (!Files.isDirectory(contentDir)) {
-        return emptyMap()
+        return ScriptedNpcIndex(emptyMap(), emptyList())
     }
     val links = mutableMapOf<String, ShopInventoryInfo>()
-    val npcPattern = Regex("""onOpNpc\d\s*\(\s*"([^"]+)"""")
+    val opPatterns = mutableListOf<NpcOpPattern>()
+    val npcPattern = Regex("""onOpNpc(\d)\s*\(\s*"([^"]+)"""")
     val shopOpenPattern =
         Regex("""shops\.open\s*\((?s:.*?)"[^"]+"\s*,\s*"(inv\.[^"]+)"""")
     val invLiteralPattern = Regex(""""(inv\.[^"]+)"""")
@@ -1487,7 +1535,17 @@ private fun loadScriptedShopLinks(root: Path, rawShopIndex: RawShopIndex): Map<S
             .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".kt") }
             .forEach { file ->
                 val text = Files.readString(file)
-                val npcs = npcPattern.findAll(text).map { it.groupValues[1] }.filter { it.startsWith("npc.") }.toSet()
+                val npcOps =
+                    npcPattern.findAll(text)
+                        .mapNotNull { match ->
+                            val opSlot = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+                            val npcInternal = match.groupValues[2].takeIf { it.startsWith("npc.") }
+                                ?: return@mapNotNull null
+                            NpcOpPattern(opSlot, npcInternal)
+                        }
+                        .toList()
+                opPatterns += npcOps
+                val npcs = npcOps.map { it.npcPattern }.toSet()
                 val directShopInvs = shopOpenPattern.findAll(text).map { it.groupValues[1] }.toSet()
                 val shopInvs =
                     if (directShopInvs.isNotEmpty()) {
@@ -1501,7 +1559,7 @@ private fun loadScriptedShopLinks(root: Path, rawShopIndex: RawShopIndex): Map<S
                 }
             }
     }
-    return links
+    return ScriptedNpcIndex(links, opPatterns)
 }
 
 private fun chooseScriptedShop(shops: List<ShopInventoryInfo>): ShopInventoryInfo? {
@@ -1546,7 +1604,7 @@ private fun NpcServerType.toLookupEntry(
     spawnedNpcRegions: Map<String, Set<String>>,
     shopParams: ShopParamIds,
     rawShopIndex: RawShopIndex,
-    scriptedShopLinks: Map<String, ShopInventoryInfo>,
+    scriptedNpcIndex: ScriptedNpcIndex,
 ): LookupEntry? {
     val internal = runCatching { internalName }.getOrNull()?.takeIf { it.startsWith("npc.") } ?: return null
     val regions = spawnedNpcRegions[internal].orEmpty()
@@ -1557,9 +1615,19 @@ private fun NpcServerType.toLookupEntry(
             ?.let { "$slot:$it" }
     }
     val hasTrade = ops.any { it.substringAfter(':').equals("trade", ignoreCase = true) }
+    val tradeSlot =
+        ops.asSequence()
+            .map { it.trim() }
+            .mapNotNull { action ->
+                val slot = action.substringBefore(':').toIntOrNull() ?: return@mapNotNull null
+                val option = action.substringAfter(':', "")
+                if (option.equals("trade", ignoreCase = true)) slot else null
+            }
+            .firstOrNull()
     val paramShopInventoryId = paramsRaw?.get(shopParams.inventory).asParamInt()
     val paramShopInventoryInternal = paramShopInventoryId?.let { safeReverseMapping(RSCMType.INV, it) }
-    val scriptedShop = scriptedShopLinks[internal]
+    val scriptedShop = scriptedNpcIndex.shopLinks[internal]
+    val hasNativeTradeScript = tradeSlot?.let { scriptedNpcIndex.hasOp(internal, it) } == true
     val linkedShop =
         rawShopIndex.byInternal(paramShopInventoryInternal)
             ?: scriptedShop
@@ -1584,6 +1652,7 @@ private fun NpcServerType.toLookupEntry(
         shopChangeDelta = paramsRaw?.get(shopParams.changePercentage).asParamInt() ?: linkedShop?.changeDelta,
         shopStock = linkedShop?.stock.orEmpty(),
         scriptedShopInternal = scriptedShop?.internal,
+        hasNativeTradeScript = hasNativeTradeScript,
     )
 }
 
@@ -1632,8 +1701,7 @@ private fun parseCoords(input: String): WorldCoord? {
     return null
 }
 
-private fun ensureShopMakerCompatibility(repoRoot: Path): Boolean =
-    ensureInventoryCodecCompatibility(repoRoot)
+private fun ensureShopMakerCompatibility(repoRoot: Path): Boolean = true
 
 private fun ensureInventoryCodecCompatibility(repoRoot: Path): Boolean {
     val file = repoRoot.resolve(INVENTORY_SERVER_CODEC).normalize()

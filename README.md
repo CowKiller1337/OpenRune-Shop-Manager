@@ -10,6 +10,7 @@ parameter by hand. It is designed as a drop-in Gradle module for an OpenRune ser
 - Search cache NPCs that have a `Trade` option.
 - Search cache items and build shop stock rows.
 - Recreate existing in-world shops without moving the NPC.
+- Repair missing existing-shop Trade scripts with normal Aubury-style OpenRune code.
 - Create custom shop NPC copies at pasted world coordinates.
 - Reload generated shops and edit them later.
 - Load the stock from a selected existing shop NPC.
@@ -83,8 +84,9 @@ has the expected OpenRune data folders.
 ## How To Use
 
 Use **Recreate existing** when you want to change a shop that already exists in the world. This
-mode only changes the shop title, prices, and stock. It does not move the NPC. If you want a shop
-at different coordinates, use **Create custom**.
+mode changes the shop title, prices, and stock. If the selected NPC has shop stock but no native
+Trade script, the tool also writes a normal Aubury-style `PluginScript` that calls `shops.open(...)`.
+It does not move the NPC. If you want a shop at different coordinates, use **Create custom**.
 
 Use **Create custom** when you want to place a new shop NPC copy. Enter the world X/Y/level, build
 the stock, and place the shop. The tool creates a unique `npc.custom_shop_*` type and a small
@@ -106,7 +108,8 @@ Generated shops are written as marked blocks to:
 - `.data/gamevals/npc.rscm`
 - `content/generic/generic-npcs/src/main/kotlin/org/rsmod/content/generic/npcs/shops/generated`
 
-Existing shop edits update the native `inv.*` shop TOML directly instead of installing a custom
+Existing shop edits update the native `inv.*` shop TOML directly. When a missing Trade click must
+be repaired, the tool writes a normal generated OpenRune shop script instead of installing a custom
 shop runtime handler.
 
 Existing shop edits usually only need a server restart. Newly spawned custom shop NPCs need a cache
