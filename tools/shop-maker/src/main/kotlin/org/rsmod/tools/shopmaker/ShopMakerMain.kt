@@ -16,7 +16,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import javax.swing.BorderFactory
-import javax.swing.Box
 import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JFrame
@@ -74,16 +73,10 @@ fun createShopMakerPanel(repoRoot: Path): JPanel =
 class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private val shopName = JTextField("New Shop")
     private val shopSlug = JTextField()
-    private val worldX = JTextField()
-    private val worldY = JTextField()
-    private val level = JTextField("0")
     private val buyMultiplier = JSpinner(SpinnerNumberModel(600, 0, 10_000, 10))
     private val sellMultiplier = JSpinner(SpinnerNumberModel(1000, 0, 10_000, 10))
     private val changeDelta = JSpinner(SpinnerNumberModel(20, 0, 10_000, 1))
-    private val recreateExistingButton = JButton("Recreate existing")
-    private val createCustomButton = JButton("Create custom")
     private val loadSelectedShopButton = JButton("Load selected shop")
-    private val loadSavedShopButton = JButton("Load saved shop")
     private val saveShopButton = JButton("Save shop")
     private val modeInfo = JLabel()
     private val npcHint = JLabel()
@@ -98,7 +91,6 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private val status = JLabel("Loading cache...")
 
     private var lookup = LookupData(emptyList(), emptyList(), emptyList())
-    private var shopMode = ShopMode.RECREATE_EXISTING
 
     init {
         minimumSize = Dimension(1180, 760)
@@ -118,10 +110,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         npcSearch.document.addDocumentListener(SimpleDocumentListener { refreshNpcList() })
         npcRegion.addActionListener { refreshNpcList() }
         itemSearch.document.addDocumentListener(SimpleDocumentListener { refreshItemList() })
-        recreateExistingButton.addActionListener { setShopMode(ShopMode.RECREATE_EXISTING) }
-        createCustomButton.addActionListener { setShopMode(ShopMode.CREATE_CUSTOM) }
         loadSelectedShopButton.addActionListener { loadSelectedNpcShop() }
-        loadSavedShopButton.addActionListener { loadSavedShop() }
 
         loadCache()
         refreshModeUi()
@@ -176,16 +165,13 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
 
     private fun buildShopPanel(): JPanel {
         val panel = JPanel(BorderLayout(8, 8))
-        panel.border = BorderFactory.createTitledBorder("Generated Shop")
+        panel.border = BorderFactory.createTitledBorder("Native Shop")
 
         val north = JPanel(BorderLayout(8, 8))
         val fields = JPanel(GridBagLayout())
         var row = 0
         fields.addRow(row++, "Shop title", shopName)
         fields.addRow(row++, "Shop slug", shopSlug)
-        fields.addRow(row++, "World X", worldX)
-        fields.addRow(row++, "World Y", worldY)
-        fields.addRow(row++, "Level", level)
         fields.addRow(row++, "Buy multiplier", buyMultiplier)
         fields.addRow(row++, "Sell multiplier", sellMultiplier)
         fields.addRow(row++, "Price delta", changeDelta)
@@ -201,7 +187,6 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         val actions = JPanel(GridLayout(2, 1, 0, 4))
         val loadActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
         loadActions.add(loadSelectedShopButton)
-        loadActions.add(loadSavedShopButton)
 
         val editActions = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0))
         editActions.add(removeStock)
@@ -233,51 +218,24 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             BorderFactory.createEmptyBorder(4, 6, 6, 6),
         )
 
-        val buttons = JPanel()
-        buttons.add(recreateExistingButton)
-        buttons.add(Box.createHorizontalStrut(8))
-        buttons.add(createCustomButton)
-
         val help = JLabel(
-            "<html><b>But why?</b> Recreating an existing Trade NPC is the safer option. " +
-                "Creating a custom shop can spawn a new copy, but it needs X/Y/level and a rebuild.</html>",
+            "<html><b>Native existing shops:</b> edit the stock for an existing `inv.*` shop. " +
+                "If the NPC is missing a Trade script, the tool writes a normal OpenRune script " +
+                "that calls `shops.open(...)`.</html>",
         )
 
-        panel.add(buttons, BorderLayout.NORTH)
         panel.add(modeInfo, BorderLayout.CENTER)
         panel.add(help, BorderLayout.SOUTH)
         return panel
     }
 
-    private fun setShopMode(mode: ShopMode) {
-        shopMode = mode
-        refreshModeUi()
-        refreshNpcList()
-    }
-
     private fun refreshModeUi() {
-        val custom = shopMode == ShopMode.CREATE_CUSTOM
-        recreateExistingButton.isEnabled = custom
-        createCustomButton.isEnabled = !custom
-        saveShopButton.text = if (custom) "Place shop" else "Save shop"
-        worldX.isEnabled = custom
-        worldY.isEnabled = custom
-        level.isEnabled = custom
-        npcHint.text =
-            if (custom) {
-                "Create custom: shows Trade-capable NPC models. You choose where the new copy stands."
-            } else {
-                "Recreate existing: shows only in-world Trade NPCs that already have shop data."
-            }
+        saveShopButton.text = "Save native shop"
+        npcHint.text = "Shows in-world Trade NPCs with native shop data."
         modeInfo.text =
-            if (custom) {
-                "<html><b>Create custom:</b> choose a Trade-capable NPC model, add stock, enter the " +
-                    "world X/Y/level where the new shop copy should stand, then rebuild cache/map data and restart.</html>"
-            } else {
-                "<html><b>Recreate existing:</b> choose an in-world shop NPC. This saves the shop stock " +
-                    "and repairs the Trade click with a normal OpenRune shop script when one is missing. " +
-                    "It does not move the NPC.</html>"
-            }
+            "<html><b>Recreate existing:</b> choose an in-world shop NPC. This saves the native shop stock " +
+                "and repairs the Trade click with a normal OpenRune shop script when one is missing. " +
+                "It does not move the NPC or create new NPC data.</html>"
     }
 
     private fun loadCache() {
@@ -335,9 +293,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         val selectedRegion = npcRegion.selectedItem as? String ?: ALL_REGIONS
         val filtered =
             lookup.npcs.asSequence()
-                .filter { it.canOpenShop }
                 .filter { selectedRegion == ALL_REGIONS || selectedRegion in it.regions }
-                .filter { shopMode == ShopMode.CREATE_CUSTOM || it.isExistingShopNpc }
+                .filter { it.isExistingShopNpc }
                 .filter { it.matches(query) }
                 .take(MAX_SEARCH_RESULTS)
                 .toList()
@@ -413,17 +370,14 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
 
             val slug = selectedNpc.shopInventoryInternal
                 ?.removePrefix("inv.")
-                ?.removePrefix("custom_shop_")
                 ?.takeIf { it.isNotBlank() }
                 ?: (selectedNpc.shopTitle ?: selectedNpc.name).toSlug()
             applyLoadedShop(
                 LoadedShop(
                     label = selectedNpc.name,
-                    mode = ShopMode.RECREATE_EXISTING,
                     npcInternal = selectedNpc.internal,
                     title = selectedNpc.shopTitle ?: "${selectedNpc.name} Shop",
                     slug = slug,
-                    coord = null,
                     buyMultiplier = selectedNpc.shopBuyMultiplier ?: DEFAULT_BUY_MULTIPLIER,
                     sellMultiplier = selectedNpc.shopSellMultiplier ?: DEFAULT_SELL_MULTIPLIER,
                     changeDelta = selectedNpc.shopChangeDelta ?: DEFAULT_CHANGE_DELTA,
@@ -435,44 +389,12 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         }
     }
 
-    private fun loadSavedShop() {
-        try {
-            val shops = loadGeneratedShops(repoRoot, lookup)
-            if (shops.isEmpty()) {
-                JOptionPane.showMessageDialog(this, "No saved Shop Manager shops found yet.")
-                return
-            }
-            val selected = JOptionPane.showInputDialog(
-                this,
-                "Pick a saved Shop Manager shop to edit.",
-                "Load saved shop",
-                JOptionPane.PLAIN_MESSAGE,
-                null,
-                shops.toTypedArray(),
-                shops.first(),
-            ) as? LoadedShop ?: return
-            applyLoadedShop(selected)
-        } catch (e: Exception) {
-            showError("Could not load saved shops.", e)
-        }
-    }
-
     private fun applyLoadedShop(shop: LoadedShop) {
-        setShopMode(shop.mode)
         shopSlug.text = shop.slug
         shopName.text = shop.title
         buyMultiplier.value = shop.buyMultiplier
         sellMultiplier.value = shop.sellMultiplier
         changeDelta.value = shop.changeDelta
-        if (shop.coord != null) {
-            worldX.text = shop.coord.x.toString()
-            worldY.text = shop.coord.y.toString()
-            level.text = shop.coord.level.toString()
-        } else {
-            worldX.text = ""
-            worldY.text = ""
-            level.text = "0"
-        }
         stockModel.replaceAll(shop.stock)
         val selectedNpc = lookup.npcs.firstOrNull { it.internal == shop.npcInternal }
         if (selectedNpc != null) {
@@ -499,36 +421,12 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         try {
             val spec = readSpec()
             val generated = buildGeneratedFiles(spec)
-            val existingShopAtTile = spec.coord?.let { findGeneratedShopAt(repoRoot, it, spec.marker) }
-            if (existingShopAtTile != null) {
-                val replace = JOptionPane.showConfirmDialog(
-                    this,
-                    "A generated shop already exists at ${spec.coord?.label}.\n\n" +
-                        "${existingShopAtTile.npcInternal}\n\nReplace that generated shop?",
-                    "Shop already exists",
-                    JOptionPane.YES_NO_OPTION,
-                )
-                if (replace != JOptionPane.YES_OPTION) {
-                    status.text = "Shop placement cancelled."
-                    return
-                }
-                removeGeneratedShop(repoRoot, existingShopAtTile.marker)
-            }
             generated.write(repoRoot)
             preview.text = generated.preview()
-            status.text =
-                if (spec.spawnNpc) {
-                    "Placed ${spec.shopTitle}. Rebuild cache/map data and restart server before testing."
-                } else {
-                    "Saved ${spec.shopTitle}. Restart server before testing."
-                }
+            status.text = "Saved ${spec.shopTitle}. Rebuild cache and restart server before testing."
             JOptionPane.showMessageDialog(
                 this,
-                if (spec.spawnNpc) {
-                    "Shop placed. Rebuild cache/map data with :or-cache:buildCache, then restart the server."
-                } else {
-                    "Shop saved. Restart the server before testing."
-                },
+                "Shop saved. Rebuild cache with :or-cache:buildCache, then restart the server.",
             )
         } catch (e: Exception) {
             showError("Could not place shop.", e)
@@ -539,10 +437,11 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         val selectedNpc = npcList.selectedValue
             ?: error("Pick a shop NPC first.")
         require(selectedNpc.canOpenShop) { "Pick an NPC that can open a shop." }
-        require(shopMode == ShopMode.CREATE_CUSTOM || selectedNpc.isExistingShopNpc) {
-            "Recreate existing only supports in-world NPCs that already have shop data. " +
-                "Use Create custom if you want to place a new shop at different coordinates."
+        require(selectedNpc.isExistingShopNpc) {
+            "Only in-world NPCs with native shop data can be edited."
         }
+        val rawShopInternal = selectedNpc.shopInventoryInternal ?: selectedNpc.scriptedShopInternal
+            ?: error("Could not identify the native shop inventory for ${selectedNpc.name}.")
         val slug = shopSlug.text.toSlug()
         require(slug.isNotBlank()) { "Shop slug cannot be empty." }
         require(stockModel.rows.isNotEmpty()) { "Add at least one stock item." }
@@ -551,25 +450,12 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 "Split larger shops or add a larger render inventory first."
         }
 
-        val shouldSpawnNpc = shopMode == ShopMode.CREATE_CUSTOM
-        val coord =
-            if (shouldSpawnNpc) {
-                val x = worldX.text.trim().toIntOrNull() ?: error("World X must be a number.")
-                val y = worldY.text.trim().toIntOrNull() ?: error("World Y must be a number.")
-                val z = level.text.trim().toIntOrNull() ?: error("Level must be a number.")
-                WorldCoord(x, y, z)
-            } else {
-                null
-            }
-
         return ShopSpec(
-            shopTitle = shopName.text.trim().ifBlank { "Custom Shop" },
+            shopTitle = shopName.text.trim().ifBlank { "Shop" },
             slug = slug,
             inheritedNpc = selectedNpc,
-            coord = coord,
-            spawnNpc = shouldSpawnNpc,
-            rawShopInternal = if (shouldSpawnNpc) null else selectedNpc.shopInventoryInternal ?: selectedNpc.scriptedShopInternal,
-            writeNativeScript = shouldSpawnNpc || (selectedNpc.scriptedShopInternal == null && !selectedNpc.hasNativeTradeScript),
+            rawShopInternal = rawShopInternal,
+            writeNativeScript = selectedNpc.scriptedShopInternal == null && !selectedNpc.hasNativeTradeScript,
             buyMultiplier = buyMultiplier.value as Int,
             sellMultiplier = sellMultiplier.value as Int,
             changeDelta = changeDelta.value as Int,
@@ -590,11 +476,6 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         private const val DEFAULT_CHANGE_DELTA = 20
         private const val MAX_RENDER_STOCK_ROWS = 28
     }
-}
-
-private enum class ShopMode {
-    RECREATE_EXISTING,
-    CREATE_CUSTOM,
 }
 
 private data class LookupData(
@@ -787,20 +668,15 @@ private data class RawShopIndex(
 
 private data class LoadedShop(
     val label: String,
-    val mode: ShopMode,
     val npcInternal: String,
     val title: String,
     val slug: String,
-    val coord: WorldCoord?,
     val buyMultiplier: Int,
     val sellMultiplier: Int,
     val changeDelta: Int,
     val stock: List<StockEntry>,
 ) {
-    override fun toString(): String {
-        val modeText = if (mode == ShopMode.CREATE_CUSTOM) "custom coords" else "existing NPC"
-        return "$title - $label ($modeText)"
-    }
+    override fun toString(): String = "$title - $label"
 }
 
 private data class ShopParamIds(
@@ -828,134 +704,56 @@ private data class ShopSpec(
     val shopTitle: String,
     val slug: String,
     val inheritedNpc: LookupEntry,
-    val coord: WorldCoord?,
-    val spawnNpc: Boolean,
-    val rawShopInternal: String?,
+    val rawShopInternal: String,
     val writeNativeScript: Boolean,
     val buyMultiplier: Int,
     val sellMultiplier: Int,
     val changeDelta: Int,
     val stock: List<StockEntry>,
 ) {
-    val invInternal: String get() = "inv.custom_shop_$slug"
-    val openInvInternal: String get() = rawShopInternal ?: invInternal
-    val npcInternal: String get() = if (spawnNpc) "npc.$marker" else inheritedNpc.internal
-    val marker: String get() = "custom_shop_$slug"
+    val openInvInternal: String get() = rawShopInternal
+    val npcInternal: String get() = inheritedNpc.internal
     val scriptMarker: String
-        get() =
-            if (spawnNpc) {
-                marker
-            } else {
-                "existing_shop_${inheritedNpc.internal.removePrefix("npc.").toSlug()}_" +
-                    openInvInternal.removePrefix("inv.").toSlug()
-            }
-}
-
-private data class WorldCoord(val x: Int, val y: Int, val level: Int) {
-    val label: String get() = "$x, $y, $level"
-
-    fun toCoordGridString(): String {
-        val mapX = x.floorDiv(64)
-        val mapY = y.floorDiv(64)
-        val localX = Math.floorMod(x, 64)
-        val localY = Math.floorMod(y, 64)
-        return "${level}_${mapX}_${mapY}_${localX}_${localY}"
-    }
+        get() = "native_shop_${inheritedNpc.internal.removePrefix("npc.").toSlug()}_" +
+            openInvInternal.removePrefix("inv.").toSlug()
 }
 
 private data class GeneratedFiles(
-    val marker: String,
-    val coord: WorldCoord?,
-    val shopToml: String,
-    val npcToml: String?,
-    val spawnToml: String?,
-    val invGameval: String?,
-    val npcGameval: String?,
     val nativeScriptPath: String?,
     val nativeScript: String?,
-    val rawShopInternal: String?,
-    val rawShopToml: String?,
+    val rawShopInternal: String,
+    val rawShopToml: String,
 ) {
     fun preview(): String =
         buildString {
-            appendLine("----- NPC mode -----")
-            if (rawShopInternal != null) {
-                appendLine("Updates native shop inventory: $rawShopInternal")
-                appendLine(
-                    if (nativeScript != null) {
-                        "Repairs the existing NPC Trade click with a native OpenRune shop script."
-                    } else {
-                        "Uses the existing native OpenRune Trade script."
-                    },
-                )
-            } else if (coord == null) {
-                appendLine("Patches existing visible NPC type: no new NPC spawn.")
-            } else {
-                appendLine("Spawns a native Shop Manager NPC type at:")
-                appendLine("World: ${coord.label}")
-                appendLine("Map: ${coord.toCoordGridString()}")
-            }
+            appendLine("----- Native shop inventory -----")
+            appendLine("Updates native shop inventory: $rawShopInternal")
+            appendLine(rawShopToml)
             appendLine()
-            appendLine("----- .data/raw-cache/server/shops/custom_shops.toml -----")
-            appendLine(if (rawShopToml == null) shopToml else "No generated inventory block.")
-            appendLine("----- .data/raw-cache/server/custom_shop_npcs.toml -----")
-            appendLine(npcToml ?: "No generated NPC block.")
-            appendLine("----- .data/raw-cache/map/npcs/custom_shops.toml -----")
-            appendLine(spawnToml ?: "No new NPC spawn.")
-            appendLine("----- native OpenRune shop script -----")
-            appendLine(nativeScriptPath ?: "No generated shop script.")
+            appendLine("----- Native OpenRune shop script -----")
+            appendLine(
+                if (nativeScript != null) {
+                    "Repairs the existing NPC Trade click with a native OpenRune shop script."
+                } else {
+                    "Uses the existing native OpenRune Trade script."
+                },
+            )
+            if (nativeScriptPath != null) {
+                appendLine(nativeScriptPath)
+            }
             if (nativeScript != null) {
                 appendLine(nativeScript)
             }
-            if (rawShopToml != null) {
-                appendLine("----- existing shop inventory -----")
-                appendLine(rawShopToml)
-            }
-            appendLine("----- .data/gamevals/inv.rscm -----")
-            appendLine(invGameval ?: "No generated inventory gameval.")
-            appendLine("----- .data/gamevals/npc.rscm -----")
-            appendLine(npcGameval ?: "No generated NPC gameval.")
         }
 
     fun write(root: Path) {
-        if (rawShopInternal != null && rawShopToml != null) {
-            writeRawShop(root, rawShopInternal, rawShopToml)
-            removeGeneratedShop(root, marker)
-            if (nativeScriptPath != null && nativeScript != null) {
-                writeNativeShopScript(root.resolve(nativeScriptPath), nativeScript)
-                ensureGradleDependency(root.resolve(GENERIC_NPCS_BUILD_FILE), SHOPS_API_DEPENDENCY)
-            }
-            return
-        }
-        if (!ensureInventoryCodecCompatibility(root)) {
-            error("Compatibility fix was not installed.")
-        }
-        upsertManagedBlock(root.resolve(CUSTOM_SHOPS_TOML), marker, shopToml)
-        if (npcToml != null) {
-            upsertManagedBlock(root.resolve(CUSTOM_SHOP_NPCS_TOML), marker, npcToml)
-        }
-        if (spawnToml != null) {
-            upsertManagedBlock(root.resolve(CUSTOM_SHOP_SPAWNS_TOML), marker, spawnToml)
-        } else {
-            removeManagedBlock(root.resolve(CUSTOM_SHOP_SPAWNS_TOML), marker)
-        }
+        writeRawShop(root, rawShopInternal, rawShopToml)
         if (nativeScriptPath != null && nativeScript != null) {
             writeNativeShopScript(root.resolve(nativeScriptPath), nativeScript)
             ensureGradleDependency(root.resolve(GENERIC_NPCS_BUILD_FILE), SHOPS_API_DEPENDENCY)
         }
-        if (invGameval != null) {
-            upsertGameval(root.resolve(INV_GAMEVALS), invGameval)
-        }
-        if (npcGameval != null) {
-            upsertGameval(root.resolve(NPC_GAMEVALS), npcGameval)
-        }
     }
 }
-
-private data class ExistingGeneratedShop(
-    val marker: String,
-    val npcInternal: String,
-)
 
 private class StockTableModel : AbstractTableModel() {
     val rows: MutableList<StockEntry> = mutableListOf()
@@ -1037,72 +835,14 @@ private class SimpleDocumentListener(private val callback: () -> Unit) : Documen
 }
 
 private fun buildGeneratedFiles(spec: ShopSpec): GeneratedFiles {
-    val invKey = spec.invInternal.removePrefix("inv.")
-    val npcKey = spec.npcInternal.removePrefix("npc.")
-    val existingInvGameval = existingGameval(Paths.get(INV_GAMEVALS), invKey)?.takeIf { it in INV_CUSTOM_ID_RANGE }
-    val existingNpcGameval = existingGameval(Paths.get(NPC_GAMEVALS), npcKey)?.takeIf { it in NPC_CUSTOM_ID_RANGE }
-
-    val rawShopToml =
-        spec.rawShopInternal?.let { rawInternal ->
-            buildShopInventoryToml(
-                invInternal = rawInternal,
-                title = spec.shopTitle,
-                buyMultiplier = spec.buyMultiplier,
-                sellMultiplier = spec.sellMultiplier,
-                changeDelta = spec.changeDelta,
-                stock = spec.stock,
-            )
-        }
-
-    val shopToml = buildShopInventoryToml(
-        invInternal = spec.invInternal,
+    val rawShopToml = buildShopInventoryToml(
+        invInternal = spec.rawShopInternal,
         title = spec.shopTitle,
         buyMultiplier = spec.buyMultiplier,
         sellMultiplier = spec.sellMultiplier,
         changeDelta = spec.changeDelta,
         stock = spec.stock,
     )
-
-    val npcToml =
-        if (spec.spawnNpc) {
-            buildString {
-                appendLine("[[npc]]")
-                appendLine("id = ${spec.npcInternal.tomlString()}")
-                appendLine("inherit = ${spec.inheritedNpc.internal.tomlString()}")
-                appendLine("moveRestrict = \"NoMove\"")
-                appendLine("defaultMode = \"None\"")
-                appendLine("wanderRange = 0")
-                appendLine()
-                appendLine("[npc.params]")
-                appendLine("\"param.shop_sell_percentage\" = ${spec.sellMultiplier}")
-                appendLine("\"param.shop_buy_percentage\" = ${spec.buyMultiplier}")
-                appendLine("\"param.shop_change_percentage\" = ${spec.changeDelta}")
-            }.trimEnd()
-        } else {
-            null
-        }
-
-    val spawnToml =
-        spec.coord?.let { coord ->
-            buildString {
-                appendLine("[[spawn]]")
-                appendLine("npc = ${spec.npcInternal.tomlString()}")
-                appendLine("coords = ${coord.toCoordGridString().tomlString()}")
-            }.trimEnd()
-        }
-
-    val invGameval =
-        if (rawShopToml == null) {
-            "$invKey=${existingInvGameval ?: nextGameval(Paths.get(INV_GAMEVALS), INV_CUSTOM_ID_RANGE)}"
-        } else {
-            null
-        }
-    val npcGameval =
-        if (spec.spawnNpc) {
-            "$npcKey=${existingNpcGameval ?: nextGameval(Paths.get(NPC_GAMEVALS), NPC_CUSTOM_ID_RANGE)}"
-        } else {
-            null
-        }
     val nativeScriptPath = if (spec.writeNativeScript) nativeShopScriptPath(spec.scriptMarker) else null
     val nativeScript =
         if (spec.writeNativeScript) {
@@ -1112,13 +852,6 @@ private fun buildGeneratedFiles(spec: ShopSpec): GeneratedFiles {
         }
 
     return GeneratedFiles(
-        marker = spec.marker,
-        coord = spec.coord,
-        shopToml = shopToml,
-        npcToml = npcToml,
-        spawnToml = spawnToml,
-        invGameval = invGameval,
-        npcGameval = npcGameval,
         nativeScriptPath = nativeScriptPath,
         nativeScript = nativeScript,
         rawShopInternal = spec.rawShopInternal,
@@ -1165,7 +898,7 @@ private fun buildShopInventoryToml(
     }.trimEnd()
 
 private fun buildNativeShopScript(spec: ShopSpec, tradeSlot: Int): String {
-    val className = nativeShopClassName(spec.marker)
+    val className = nativeShopClassName(spec.scriptMarker)
     val openFunction = "open$className"
     return buildString {
         appendLine("package org.rsmod.content.generic.npcs.shops")
@@ -1201,95 +934,6 @@ private fun nativeShopClassName(marker: String): String =
                 .replaceFirstChar { char -> char.uppercase() }
         }
 
-private fun findGeneratedShopAt(root: Path, coord: WorldCoord, currentMarker: String): ExistingGeneratedShop? {
-    val file = root.resolve(CUSTOM_SHOP_SPAWNS_TOML)
-    if (!Files.exists(file)) {
-        return null
-    }
-    val coordGrid = coord.toCoordGridString()
-    val coordPattern = Regex("""coords\s*=\s*"${Regex.escape(coordGrid)}"""")
-    val npcPattern = Regex("""npc\s*=\s*"([^"]+)"""")
-    return managedBlockPattern.findAll(Files.readString(file))
-        .mapNotNull { match ->
-            val marker = match.groupValues[1]
-            if (marker == currentMarker) {
-                return@mapNotNull null
-            }
-            val block = match.groupValues[2]
-            if (!coordPattern.containsMatchIn(block)) {
-                return@mapNotNull null
-            }
-            val npcInternal = npcPattern.find(block)?.groupValues?.get(1) ?: marker
-            ExistingGeneratedShop(marker, npcInternal)
-        }
-        .firstOrNull()
-}
-
-private fun loadGeneratedShops(root: Path, lookup: LookupData): List<LoadedShop> {
-    val inventoryBlocks = managedBlocks(root.resolve(CUSTOM_SHOPS_TOML))
-    val npcBlocks = managedBlocks(root.resolve(CUSTOM_SHOP_NPCS_TOML))
-    val spawnBlocks = managedBlocks(root.resolve(CUSTOM_SHOP_SPAWNS_TOML))
-    return (inventoryBlocks.keys + npcBlocks.keys)
-        .distinct()
-        .mapNotNull { marker ->
-            val inventoryBlock = inventoryBlocks[marker] ?: return@mapNotNull null
-            val npcBlock = npcBlocks[marker] ?: return@mapNotNull null
-            val invInternal = tomlStringValue(inventoryBlock, "id") ?: return@mapNotNull null
-            val npcInternal = tomlStringValue(npcBlock, "id") ?: return@mapNotNull null
-            val coord = spawnBlocks[marker]?.let { tomlStringValue(it, "coords") }?.let(::parseCoords)
-            val title =
-                tomlStringValue(npcBlock, "param.shop_name")
-                    ?: tomlStringValue(inventoryBlock, "name")
-                    ?: marker.removePrefix("custom_shop_").replace('_', ' ')
-            val stock = inventoryStockRows(inventoryBlock, lookup)
-            LoadedShop(
-                label = marker.removePrefix("custom_shop_").replace('_', ' '),
-                mode = if (coord == null) ShopMode.RECREATE_EXISTING else ShopMode.CREATE_CUSTOM,
-                npcInternal = npcInternal,
-                title = title,
-                slug = invInternal.removePrefix("inv.").removePrefix("custom_shop_"),
-                coord = coord,
-                buyMultiplier =
-                    tomlIntValue(npcBlock, "param.shop_buy_percentage")
-                        ?: tomlIntValue(inventoryBlock, "buyMultiplier")
-                        ?: 600,
-                sellMultiplier =
-                    tomlIntValue(npcBlock, "param.shop_sell_percentage")
-                        ?: tomlIntValue(inventoryBlock, "sellMultiplier")
-                        ?: 1000,
-                changeDelta =
-                    tomlIntValue(npcBlock, "param.shop_change_percentage")
-                        ?: tomlIntValue(inventoryBlock, "delta")
-                        ?: 20,
-                stock = stock,
-            )
-        }
-        .sortedBy { it.title.lowercase() }
-}
-
-private fun managedBlocks(file: Path): Map<String, String> {
-    if (!Files.exists(file)) {
-        return emptyMap()
-    }
-    return managedBlockPattern.findAll(Files.readString(file))
-        .associate { match -> match.groupValues[1] to match.groupValues[2] }
-}
-
-private fun inventoryStockRows(block: String, lookup: LookupData): List<StockEntry> {
-    val stockBlock = Regex("""(?s)\[\[inventory\.stock]](.*?)(?=\R\[\[inventory\.stock]]|\z)""")
-    return stockBlock.findAll(block)
-        .mapNotNull { match ->
-            val text = match.groupValues[1]
-            val itemInternal = tomlStringValue(text, "obj") ?: return@mapNotNull null
-            StockEntry(
-                item = lookup.itemByInternal(itemInternal),
-                count = tomlIntValue(text, "count") ?: 0,
-                restockCycles = tomlIntValue(text, "restockCycles") ?: 100,
-            )
-        }
-        .toList()
-}
-
 private fun tomlStringValue(block: String, key: String): String? {
     val regex = Regex("""(?m)^\s*"?\Q$key\E"?\s*=\s*"([^"]*)"""")
     return regex.find(block)?.groupValues?.get(1)
@@ -1298,15 +942,6 @@ private fun tomlStringValue(block: String, key: String): String? {
 private fun tomlIntValue(block: String, key: String): Int? {
     val regex = Regex("""(?m)^\s*"?\Q$key\E"?\s*=\s*(-?\d+)""")
     return regex.find(block)?.groupValues?.get(1)?.toIntOrNull()
-}
-
-private fun removeGeneratedShop(root: Path, marker: String) {
-    GENERATED_SHOP_TOML_FILES.forEach { file ->
-        removeManagedBlock(root.resolve(file), marker)
-    }
-    Files.deleteIfExists(root.resolve(nativeShopScriptPath(marker)))
-    removeGameval(root.resolve(NPC_GAMEVALS), marker)
-    removeGameval(root.resolve(INV_GAMEVALS), marker)
 }
 
 private fun writeNativeShopScript(file: Path, script: String) {
@@ -1346,82 +981,6 @@ private fun findRawShopFile(root: Path, invInternal: String): Path? {
     }
 }
 
-private fun upsertManagedBlock(file: Path, marker: String, block: String) {
-    Files.createDirectories(file.parent)
-    val begin = "# BEGIN SHOP MAKER: $marker"
-    val end = "# END SHOP MAKER: $marker"
-    val wrapped = "$begin\n${block.trimEnd()}\n$end\n"
-    val existing = if (Files.exists(file)) Files.readString(file) else ""
-    val pattern = Regex("${Regex.escape(begin)}\\R.*?${Regex.escape(end)}\\R?", RegexOption.DOT_MATCHES_ALL)
-    val next =
-        if (pattern.containsMatchIn(existing)) {
-            existing.replace(pattern, wrapped)
-        } else {
-            buildString {
-                append(existing.trimEnd())
-                if (isNotEmpty()) {
-                    appendLine()
-                    appendLine()
-                }
-                append(wrapped)
-            }
-        }
-    Files.writeString(file, next)
-}
-
-private fun removeManagedBlock(file: Path, marker: String) {
-    if (!Files.exists(file)) {
-        return
-    }
-    val begin = "# BEGIN SHOP MAKER: $marker"
-    val end = "# END SHOP MAKER: $marker"
-    val existing = Files.readString(file)
-    val pattern = Regex("${Regex.escape(begin)}\\R.*?${Regex.escape(end)}\\R?", RegexOption.DOT_MATCHES_ALL)
-    val next = existing.replace(pattern, "").trimEnd()
-    Files.writeString(file, if (next.isBlank()) "" else "$next\n")
-}
-
-private fun upsertGameval(file: Path, line: String) {
-    Files.createDirectories(file.parent)
-    val key = line.substringBefore('=').trim()
-    val existing = if (Files.exists(file)) Files.readAllLines(file) else emptyList()
-    var replaced = false
-    val next =
-        existing
-            .filterNot { it.startsWith("# BEGIN SHOP MAKER:") || it.startsWith("# END SHOP MAKER:") }
-            .mapNotNull { existingLine ->
-                if (existingLine.isBlank()) {
-                    return@mapNotNull null
-                }
-                if (existingLine.substringBefore('=').trim() == key) {
-                    replaced = true
-                    line
-                } else {
-                    existingLine
-                }
-            }
-            .toMutableList()
-    if (!replaced) {
-        next += line
-    }
-    Files.write(file, next)
-}
-
-private fun removeGameval(file: Path, key: String) {
-    if (!Files.exists(file)) {
-        return
-    }
-    val next =
-        Files.readAllLines(file)
-            .filterNot { line ->
-                line.isBlank() ||
-                    line.startsWith("# BEGIN SHOP MAKER:") ||
-                    line.startsWith("# END SHOP MAKER:") ||
-                    line.substringBefore('=').trim() == key
-            }
-    Files.write(file, next)
-}
-
 private fun existingGameval(file: Path, key: String): Int? {
     if (!Files.exists(file)) {
         return null
@@ -1431,20 +990,6 @@ private fun existingGameval(file: Path, key: String): Int? {
         .asSequence()
         .mapNotNull { regex.matchEntire(it)?.groupValues?.get(1)?.toIntOrNull() }
         .firstOrNull()
-}
-
-private fun nextGameval(file: Path, range: IntRange): Int {
-    val used =
-        if (Files.exists(file)) {
-            Files.readAllLines(file)
-                .asSequence()
-                .mapNotNull { it.substringAfter('=', "").trim().toIntOrNull() }
-                .filter { it in range }
-                .toSet()
-        } else {
-            emptySet()
-        }
-    return range.firstOrNull { it !in used } ?: error("No free gameval ids left in $range.")
 }
 
 private fun loadSpawnedNpcRegions(root: Path): Map<String, Set<String>> {
@@ -1673,108 +1218,7 @@ private fun ItemServerType.toLookupEntry(): LookupEntry? {
     )
 }
 
-private fun parseCoords(input: String): WorldCoord? {
-    val trimmed = input.trim()
-    if (trimmed.isBlank()) {
-        return null
-    }
-
-    val worldLine = Regex("""(?i)world\s+(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)""").find(trimmed)
-    if (worldLine != null) {
-        val parts = worldLine.groupValues.drop(1).map { it.toInt() }
-        return WorldCoord(parts[0], parts[1], parts[2])
-    }
-
-    val coordGrid = Regex("""(\d+)_(\d+)_(\d+)_(\d+)_(\d+)""").find(trimmed)
-    if (coordGrid != null) {
-        val parts = coordGrid.groupValues.drop(1).map { it.toInt() }
-        val level = parts[0]
-        val x = parts[1] * 64 + parts[3]
-        val y = parts[2] * 64 + parts[4]
-        return WorldCoord(x, y, level)
-    }
-
-    val numbers = Regex("""-?\d+""").findAll(trimmed).map { it.value.toInt() }.toList()
-    if (numbers.size >= 3) {
-        return WorldCoord(numbers[0], numbers[1], numbers[2])
-    }
-    return null
-}
-
 private fun ensureShopMakerCompatibility(repoRoot: Path): Boolean = true
-
-private fun ensureInventoryCodecCompatibility(repoRoot: Path): Boolean {
-    val file = repoRoot.resolve(INVENTORY_SERVER_CODEC).normalize()
-    if (!Files.exists(file)) {
-        JOptionPane.showMessageDialog(
-            null,
-            "Could not find $INVENTORY_SERVER_CODEC.\n\nOpen the shop manager from the OpenRune server root.",
-            "Shop Manager",
-            JOptionPane.ERROR_MESSAGE,
-        )
-        return false
-    }
-
-    val text = Files.readString(file)
-    val newline = if ("\r\n" in text) "\r\n" else "\n"
-    val normalized = text.replace("\r\n", "\n")
-    if (hasInventoryCodecSupport(normalized)) {
-        return true
-    }
-    val sourceBlock =
-        listOf(INVENTORY_CODEC_OLD_BLOCK, INVENTORY_CODEC_BROAD_PATCH_BLOCK)
-            .firstOrNull { normalized.contains(it) }
-    if (sourceBlock == null) {
-        JOptionPane.showMessageDialog(
-            null,
-            "Shop Manager needs custom shop inventory support, but the cache packer file does not match " +
-                "the expected OpenRune layout.\n\nNo files were changed.",
-            "Shop Manager",
-            JOptionPane.ERROR_MESSAGE,
-        )
-        return false
-    }
-
-    val install =
-        JOptionPane.showConfirmDialog(
-            null,
-            "Shop Manager needs a one-time OpenRune compatibility fix so newly generated shop inventories " +
-                "can keep their stock.\n\nA backup will be created beside InventoryServerCodec.kt.",
-            "Install Shop Manager compatibility fix?",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.WARNING_MESSAGE,
-        )
-    if (install != JOptionPane.YES_OPTION) {
-        return false
-    }
-
-    val backup = file.resolveSibling("${file.fileName}.shop-maker.bak")
-    if (!Files.exists(backup)) {
-        Files.copy(file, backup)
-    }
-    val patched = normalized.replace(sourceBlock, INVENTORY_CODEC_NEW_BLOCK)
-    Files.writeString(file, patched.replace("\n", newline))
-    JOptionPane.showMessageDialog(
-        null,
-        "Compatibility fix installed.\n\nRebuild the cache before testing generated shops.",
-        "Shop Manager",
-        JOptionPane.INFORMATION_MESSAGE,
-    )
-    return true
-}
-
-private fun hasInventoryCodecSupport(source: String): Boolean {
-    val hasCustomData = "val customData = custom?.get(id)" in source
-    val allowsCustomOnlyInventory = Regex(
-        """if\s*\(\s*inventoryType\s*==\s*null\s*&&\s*customData\s*==\s*null\s*\)\s*\{\s*return\s*}""",
-        RegexOption.DOT_MATCHES_ALL,
-    ).containsMatchIn(source)
-    val copiesCustomSize = Regex(
-        """if\s*\(\s*inventoryType\s*==\s*null\s*\)\s*\{\s*size\s*=\s*customData\.size\s*}""",
-        RegexOption.DOT_MATCHES_ALL,
-    ).containsMatchIn(source)
-    return hasCustomData && allowsCustomOnlyInventory && copiesCustomSize
-}
 
 private fun ensureGradleDependency(file: Path, dependency: String) {
     val text = Files.readString(file)
@@ -1794,21 +1238,11 @@ private fun ensureGradleDependency(file: Path, dependency: String) {
     Files.writeString(file, next.replace("\n", newline))
 }
 
-private val managedBlockPattern =
-    Regex("""# BEGIN SHOP MAKER: ([^\r\n]+)\R(.*?)# END SHOP MAKER: \1\R?""", RegexOption.DOT_MATCHES_ALL)
-
-private const val INVENTORY_SERVER_CODEC =
-    "or-cache/src/main/kotlin/dev/openrune/codec/osrs/impl/InventoryServerCodec.kt"
 private const val GENERIC_NPCS_BUILD_FILE = "content/generic/generic-npcs/build.gradle.kts"
 private const val SHOPS_API_DEPENDENCY = "implementation(projects.api.shops)"
-private const val CUSTOM_SHOPS_TOML = ".data/raw-cache/server/shops/custom_shops.toml"
-private const val CUSTOM_SHOP_NPCS_TOML = ".data/raw-cache/server/custom_shop_npcs.toml"
-private const val CUSTOM_SHOP_SPAWNS_TOML = ".data/raw-cache/map/npcs/custom_shops.toml"
 private const val RAW_SHOPS_DIR = ".data/raw-cache/server/shops"
 private const val NATIVE_SHOP_SCRIPT_DIR =
     "content/generic/generic-npcs/src/main/kotlin/org/rsmod/content/generic/npcs/shops/generated"
-private const val NPC_GAMEVALS = ".data/gamevals/npc.rscm"
-private const val INV_GAMEVALS = ".data/gamevals/inv.rscm"
 private const val PARAM_GAMEVALS = ".data/gamevals/param.rscm"
 private const val MAP_NPC_SPAWNS_DIR = ".data/raw-cache/map/npcs"
 private const val ALL_REGIONS = "All regions"
@@ -1818,8 +1252,6 @@ private const val SHOP_SELL_PERCENTAGE_PARAM_ID = 65497
 private const val SHOP_BUY_PERCENTAGE_PARAM_ID = 65498
 private const val SHOP_CHANGE_PERCENTAGE_PARAM_ID = 65499
 private const val DEFAULT_TRADE_SLOT = 3
-private val NPC_CUSTOM_ID_RANGE = 16294..16383
-private val INV_CUSTOM_ID_RANGE = 1027..4095
 private val GENERIC_SHOP_MATCH_KEYS =
     setOf(
         "shop",
@@ -1831,89 +1263,6 @@ private val GENERIC_SHOP_MATCH_KEYS =
         "trader",
         "merchant",
     )
-
-private val GENERATED_SHOP_TOML_FILES =
-    listOf(
-        CUSTOM_SHOPS_TOML,
-        CUSTOM_SHOP_NPCS_TOML,
-        CUSTOM_SHOP_SPAWNS_TOML,
-    )
-
-private val INVENTORY_CODEC_PATCH_MARKER =
-    """
-        if (inventoryType == null) {
-            size = customData.size
-        }
-    """.trimIndent()
-
-private val INVENTORY_CODEC_OLD_BLOCK =
-    """
-        override fun InventoryServerType.createData() {
-            if (types == null) return
-            val inventoryType = types[id] ?: return
-            size = inventoryType.size
-            val customData = custom?.get(id)
-
-            if (customData != null) {
-                scope = customData.scope
-                stack = customData.stack
-                flags = customData.flags
-                stock = customData.stock
-            }
-        }
-    """.trimIndent().prependIndent("    ")
-
-private val INVENTORY_CODEC_NEW_BLOCK =
-    """
-        override fun InventoryServerType.createData() {
-            if (types == null) return
-            val customData = custom?.get(id)
-            val inventoryType = types[id]
-
-            if (inventoryType == null && customData == null) {
-                return
-            }
-
-            if (inventoryType != null) {
-                size = inventoryType.size
-            }
-
-            if (customData != null) {
-                if (inventoryType == null) {
-                    size = customData.size
-                }
-                scope = customData.scope
-                stack = customData.stack
-                flags = customData.flags
-                stock = customData.stock
-            }
-        }
-    """.trimIndent().prependIndent("    ")
-
-private val INVENTORY_CODEC_BROAD_PATCH_BLOCK =
-    """
-        override fun InventoryServerType.createData() {
-            if (types == null) return
-            val customData = custom?.get(id)
-            val inventoryType = types[id]
-
-            if (inventoryType == null && customData == null) {
-                return
-            }
-
-            if (inventoryType != null) {
-                size = inventoryType.size
-            }
-
-            if (customData != null) {
-                size = customData.size
-                scope = customData.scope
-                stack = customData.stack
-                flags = customData.flags
-                stock = customData.stock
-            }
-        }
-    """.trimIndent().prependIndent("    ")
 
 private fun String.normalizedQuery(): String = trim().lowercase()
 
