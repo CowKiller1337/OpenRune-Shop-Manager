@@ -18,6 +18,7 @@ import java.nio.file.Paths
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.JButton
+import javax.swing.JComboBox
 import javax.swing.JFrame
 import javax.swing.JLabel
 import javax.swing.JList
@@ -67,6 +68,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private val npcHint = JLabel()
 
     private val npcSearch = JTextField()
+    private val npcRegion = JComboBox<String>()
     private val itemSearch = JTextField()
     private val npcList = JList<LookupEntry>()
     private val itemList = JList<LookupEntry>()
@@ -74,7 +76,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private val preview = JTextArea()
     private val status = JLabel("Loading cache...")
 
-    private var lookup = LookupData(emptyList(), emptyList())
+    private var lookup = LookupData(emptyList(), emptyList(), emptyList())
     private var shopMode = ShopMode.RECREATE_EXISTING
 
     init {
@@ -97,6 +99,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
 
         shopName.document.addDocumentListener(SimpleDocumentListener { updateDerivedSlug() })
         npcSearch.document.addDocumentListener(SimpleDocumentListener { refreshNpcList() })
+        npcRegion.addActionListener { refreshNpcList() }
         itemSearch.document.addDocumentListener(SimpleDocumentListener { refreshItemList() })
         recreateExistingButton.addActionListener { setShopMode(ShopMode.RECREATE_EXISTING) }
         createCustomButton.addActionListener { setShopMode(ShopMode.CREATE_CUSTOM) }
@@ -132,7 +135,10 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private fun buildNpcPanel(): JPanel {
         val panel = JPanel(BorderLayout(6, 6))
         panel.border = BorderFactory.createTitledBorder("Shop NPC")
-        panel.add(npcSearch.withLabel("Search NPC"), BorderLayout.NORTH)
+        val filters = JPanel(GridLayout(2, 1, 0, 4))
+        filters.add(npcSearch.withLabel("Search NPC"))
+        filters.add(npcRegion.withLabel("Region"))
+        panel.add(filters, BorderLayout.NORTH)
         panel.add(JScrollPane(npcList), BorderLayout.CENTER)
         panel.add(npcHint, BorderLayout.SOUTH)
         return panel
@@ -263,21 +269,25 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
                 publish("Loading cache definitions...")
                 ServerCacheManager.init(239)
                 publish("Indexing NPCs and items...")
-                val spawnedNpcs = loadSpawnedNpcInternals(repoRoot)
+                val spawnedNpcRegions = loadSpawnedNpcRegions(repoRoot)
                 val shopParams = ShopParamIds.load(repoRoot)
                 val rawShopIndex = loadRawShopIndex(repoRoot)
                 val scriptedShopLinks = loadScriptedShopLinks(repoRoot, rawShopIndex)
+                val regions = spawnedNpcRegions.values.flatten().distinct().sorted()
                 return LookupData(
                     npcs = ServerCacheManager.getNpcs().values
-                        .mapNotNull { it.toLookupEntry(spawnedNpcs, shopParams, rawShopIndex, scriptedShopLinks) }
+                        .mapNotNull {
+                            it.toLookupEntry(spawnedNpcRegions, shopParams, rawShopIndex, scriptedShopLinks)
+                        }
                         .sortedWith(
                             compareBy<LookupEntry> { !it.isExistingShopNpc }
-                                .thenBy { !it.hasTrade }
+                                .thenBy { !it.canOpenShop }
                                 .thenBy { it.name }
                                 .thenBy { it.id },
                         ),
                     items = ServerCacheManager.getItems().values.mapNotNull { it.toLookupEntry() }
                         .sortedWith(compareBy<LookupEntry> { it.name }.thenBy { it.id }),
+                    regions = regions,
                 )
             }
 
@@ -288,6 +298,9 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
             override fun done() {
                 try {
                     lookup = get()
+                    npcRegion.removeAllItems()
+                    npcRegion.addItem(ALL_REGIONS)
+                    lookup.regions.forEach(npcRegion::addItem)
                     status.text = "Loaded ${lookup.npcs.size} NPCs and ${lookup.items.size} items."
                     refreshNpcList()
                     refreshItemList()
@@ -302,9 +315,11 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
 
     private fun refreshNpcList() {
         val query = npcSearch.text.normalizedQuery()
+        val selectedRegion = npcRegion.selectedItem as? String ?: ALL_REGIONS
         val filtered =
             lookup.npcs.asSequence()
-                .filter { it.hasTrade }
+                .filter { it.canOpenShop }
+                .filter { selectedRegion == ALL_REGIONS || selectedRegion in it.regions }
                 .filter { shopMode == ShopMode.CREATE_CUSTOM || it.isExistingShopNpc }
                 .filter { it.matches(query) }
                 .take(MAX_SEARCH_RESULTS)
@@ -445,6 +460,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         val selectedNpc = lookup.npcs.firstOrNull { it.internal == shop.npcInternal }
         if (selectedNpc != null) {
             npcSearch.text = ""
+            npcRegion.selectedItem = ALL_REGIONS
             refreshNpcList()
             npcList.setSelectedValue(selectedNpc, true)
         }
@@ -505,7 +521,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private fun readSpec(): ShopSpec {
         val selectedNpc = npcList.selectedValue
             ?: error("Pick a shop NPC first.")
-        require(selectedNpc.hasTrade) { "Pick an NPC with a Trade option." }
+        require(selectedNpc.canOpenShop) { "Pick an NPC that can open a shop." }
         require(shopMode == ShopMode.CREATE_CUSTOM || selectedNpc.isExistingShopNpc) {
             "Recreate existing only supports in-world NPCs that already have shop data. " +
                 "Use Create custom if you want to place a new shop at different coordinates."
@@ -515,7 +531,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         require(stockModel.rows.isNotEmpty()) { "Add at least one stock item." }
         require(stockModel.rows.size <= MAX_RENDER_STOCK_ROWS) {
             "Generated shops currently support up to $MAX_RENDER_STOCK_ROWS stock rows. " +
-                "Split larger shops or test a larger render inventory first."
+                "Split larger shops or add a larger render inventory first."
         }
 
         val shouldSpawnNpc = shopMode == ShopMode.CREATE_CUSTOM
@@ -554,7 +570,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         private const val DEFAULT_BUY_MULTIPLIER = 600
         private const val DEFAULT_SELL_MULTIPLIER = 1000
         private const val DEFAULT_CHANGE_DELTA = 20
-        private const val MAX_RENDER_STOCK_ROWS = 22
+        private const val MAX_RENDER_STOCK_ROWS = 28
     }
 }
 
@@ -566,6 +582,7 @@ private enum class ShopMode {
 private data class LookupData(
     val npcs: List<LookupEntry>,
     val items: List<LookupEntry>,
+    val regions: List<String>,
 ) {
     private val itemsById: Map<Int, LookupEntry> = items.associateBy { it.id }
     private val itemsByInternal: Map<String, LookupEntry> = items.associateBy { it.internal }
@@ -577,6 +594,7 @@ private data class LookupData(
             name = safeReverseMapping(RSCMType.OBJ, id).removePrefix("obj."),
             actions = "",
             hasTrade = false,
+            regions = emptySet(),
         )
 
     fun itemByInternal(internal: String): LookupEntry =
@@ -586,6 +604,7 @@ private data class LookupData(
             name = internal.removePrefix("obj."),
             actions = "",
             hasTrade = false,
+            regions = emptySet(),
         )
 }
 
@@ -595,6 +614,7 @@ private data class LookupEntry(
     val name: String,
     val actions: String,
     val hasTrade: Boolean,
+    val regions: Set<String>,
     val hasShopInventory: Boolean = false,
     val isSpawned: Boolean = false,
     val shopInventoryId: Int? = null,
@@ -607,14 +627,28 @@ private data class LookupEntry(
     val scriptedShopInternal: String? = null,
     val cost: Int = 0,
 ) {
+    val canOpenShop: Boolean
+        get() = hasTrade || scriptedShopInternal != null
+
     val isExistingShopNpc: Boolean
-        get() = hasTrade && hasShopInventory && isSpawned
+        get() = canOpenShop && hasShopInventory && isSpawned
+
+    private val regionLabel: String
+        get() =
+            when {
+                regions.isEmpty() -> ""
+                regions.size == 1 -> regions.single()
+                regions.size == 2 -> regions.sorted().joinToString(", ")
+                else -> regions.sorted().take(2).joinToString(", ") + " +${regions.size - 2}"
+            }
 
     val label: String
         get() {
             val actionText = if (actions.isBlank()) "" else " | $actions"
+            val scriptText = if (!hasTrade && scriptedShopInternal != null) " | scripted shop" else ""
+            val regionText = if (regionLabel.isBlank()) "" else " | $regionLabel"
             val costText = if (cost > 0) " | ${cost}gp" else ""
-            return "$name [$id] $internal$actionText$costText"
+            return "$name [$id] $internal$regionText$actionText$scriptText$costText"
         }
 
     fun matches(query: String): Boolean {
@@ -656,7 +690,7 @@ private data class RawShopIndex(
     fun byInternal(internal: String?): ShopInventoryInfo? =
         internal?.let { byInternal[it] }
 
-    fun matchNpc(name: String, internal: String): ShopInventoryInfo? {
+    fun matchNpc(name: String, internal: String, regions: Set<String>): ShopInventoryInfo? {
         val candidates =
             sequenceOf(name, internal.removePrefix("npc.").replace('_', ' '))
                 .map(::shopSearchKey)
@@ -664,13 +698,37 @@ private data class RawShopIndex(
                 .flatMap { key -> sequenceOf(key, "${key}s") }
                 .distinct()
                 .toList()
-        if (candidates.isEmpty()) {
-            return null
-        }
-        return shops.firstOrNull { shop ->
+        val directMatch = shops.firstOrNull { shop ->
             val titleKey = shopSearchKey(shop.title)
             candidates.any { candidate -> candidate in titleKey }
         }
+        if (directMatch != null) {
+            return directMatch
+        }
+        return matchGenericRegionShop(name, internal, regions)
+    }
+
+    private fun matchGenericRegionShop(name: String, internal: String, regions: Set<String>): ShopInventoryInfo? {
+        val npcKey = shopSearchKey("$name ${internal.removePrefix("npc.")}")
+        if (regions.isEmpty() || !GENERIC_SHOP_MATCH_KEYS.any { it in npcKey }) {
+            return null
+        }
+        val regionKeys = regions.map(::shopSearchKey).filter { it.length >= 3 }.sortedByDescending { it.length }
+        return regionKeys
+            .asSequence()
+            .mapNotNull { regionKey ->
+                shops
+                    .filter { shop ->
+                        val titleKey = shopSearchKey(shop.title)
+                        regionKey in titleKey && ("generalstore" in titleKey || "shop" in titleKey)
+                    }
+                    .sortedWith(
+                        compareByDescending<ShopInventoryInfo> { "generalstore" in shopSearchKey(it.title) }
+                            .thenBy { it.internal },
+                    )
+                    .firstOrNull()
+            }
+            .firstOrNull()
     }
 }
 
@@ -1226,20 +1284,28 @@ private fun nextGameval(file: Path, range: IntRange): Int {
     return range.firstOrNull { it !in used } ?: error("No free gameval ids left in $range.")
 }
 
-private fun loadSpawnedNpcInternals(root: Path): Set<String> {
+private fun loadSpawnedNpcRegions(root: Path): Map<String, Set<String>> {
     val dir = root.resolve(MAP_NPC_SPAWNS_DIR)
     if (!Files.isDirectory(dir)) {
-        return emptySet()
+        return emptyMap()
     }
     val npcLine = Regex("""^\s*npc\s*=\s*"([^"]+)"""")
+    val regionsByNpc = mutableMapOf<String, MutableSet<String>>()
     Files.walk(dir).use { paths ->
-        return paths.iterator().asSequence()
+        paths.iterator().asSequence()
             .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".toml") }
-            .flatMap { file -> Files.readAllLines(file).asSequence() }
-            .mapNotNull { line -> npcLine.find(line)?.groupValues?.get(1) }
-            .filter { it.startsWith("npc.") }
-            .toSet()
+            .forEach { file ->
+                val region = file.spawnRegionName()
+                Files.readAllLines(file)
+                    .asSequence()
+                    .mapNotNull { line -> npcLine.find(line)?.groupValues?.get(1) }
+                    .filter { it.startsWith("npc.") }
+                    .forEach { npc ->
+                        regionsByNpc.getOrPut(npc) { mutableSetOf() } += region
+                    }
+            }
     }
+    return regionsByNpc.mapValues { (_, regions) -> regions.toSortedSet() }
 }
 
 private fun loadRawShopIndex(root: Path): RawShopIndex {
@@ -1361,12 +1427,13 @@ private fun shopSearchKey(value: String): String =
     value.lowercase().filter { it.isLetterOrDigit() }
 
 private fun NpcServerType.toLookupEntry(
-    spawnedNpcs: Set<String>,
+    spawnedNpcRegions: Map<String, Set<String>>,
     shopParams: ShopParamIds,
     rawShopIndex: RawShopIndex,
     scriptedShopLinks: Map<String, ShopInventoryInfo>,
 ): LookupEntry? {
     val internal = runCatching { internalName }.getOrNull()?.takeIf { it.startsWith("npc.") } ?: return null
+    val regions = spawnedNpcRegions[internal].orEmpty()
     val ops = (1..5).mapNotNull { slot ->
         actions.getOpOrNull(slot - 1)
             ?.trim()
@@ -1380,7 +1447,7 @@ private fun NpcServerType.toLookupEntry(
     val linkedShop =
         rawShopIndex.byInternal(paramShopInventoryInternal)
             ?: scriptedShop
-            ?: rawShopIndex.matchNpc(name, internal)
+            ?: rawShopIndex.matchNpc(name, internal, regions)
     val shopInventoryId =
         paramShopInventoryId ?: linkedShop?.internal?.let { runCatching { RSCM.getRSCM(it) }.getOrNull() }
     val hasShopInventory = paramShopInventoryId != null || linkedShop != null
@@ -1390,8 +1457,9 @@ private fun NpcServerType.toLookupEntry(
         name = name.ifBlank { internal.removePrefix("npc.") },
         actions = ops.joinToString(", "),
         hasTrade = hasTrade,
+        regions = regions,
         hasShopInventory = hasShopInventory,
-        isSpawned = internal in spawnedNpcs,
+        isSpawned = regions.isNotEmpty(),
         shopInventoryId = shopInventoryId,
         shopInventoryInternal = paramShopInventoryInternal ?: linkedShop?.internal,
         shopTitle = paramsRaw?.get(shopParams.name) as? String ?: linkedShop?.title,
@@ -1415,6 +1483,7 @@ private fun ItemServerType.toLookupEntry(): LookupEntry? {
         name = displayName,
         actions = "",
         hasTrade = false,
+        regions = emptySet(),
         cost = cost,
     )
 }
@@ -1643,6 +1712,7 @@ private const val NPC_GAMEVALS = ".data/gamevals/npc.rscm"
 private const val INV_GAMEVALS = ".data/gamevals/inv.rscm"
 private const val PARAM_GAMEVALS = ".data/gamevals/param.rscm"
 private const val MAP_NPC_SPAWNS_DIR = ".data/raw-cache/map/npcs"
+private const val ALL_REGIONS = "All regions"
 private const val SHOP_INVENTORY_PARAM_ID = 65525
 private const val SHOP_NAME_PARAM_ID = 65524
 private const val SHOP_SELL_PERCENTAGE_PARAM_ID = 65497
@@ -1747,6 +1817,19 @@ private val INVENTORY_CODEC_BROAD_PATCH_BLOCK =
 
 private fun String.normalizedQuery(): String = trim().lowercase()
 
+private fun Path.spawnRegionName(): String =
+    fileName.toString()
+        .removeSuffix(".toml")
+        .replace('_', ' ')
+        .replace('-', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { word ->
+            word.replaceFirstChar { char ->
+                if (char.isLowerCase()) char.titlecase() else char.toString()
+            }
+        }
+
 private fun String.toSlug(): String {
     val slug =
         trim()
@@ -1783,6 +1866,13 @@ private fun JPanel.addRow(row: Int, label: String, component: java.awt.Component
 }
 
 private fun JTextField.withLabel(label: String): JPanel {
+    val panel = JPanel(BorderLayout(4, 4))
+    panel.add(JLabel(label), BorderLayout.NORTH)
+    panel.add(this, BorderLayout.CENTER)
+    return panel
+}
+
+private fun JComboBox<String>.withLabel(label: String): JPanel {
     val panel = JPanel(BorderLayout(4, 4))
     panel.add(JLabel(label), BorderLayout.NORTH)
     panel.add(this, BorderLayout.CENTER)

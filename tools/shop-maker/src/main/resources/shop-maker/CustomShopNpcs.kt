@@ -228,7 +228,7 @@ private data class GeneratedShop(
          * server-only, so we use an existing shop-shaped inventory id for the visual channel while
          * keeping this generated inventory's stock, title, and pricing.
          */
-        private const val SHOP_MAKER_RENDER_INV = "inv.fishingguild"
+        private const val SHOP_MAKER_RENDER_INV = "inv.archeryshop2"
     }
 }
 

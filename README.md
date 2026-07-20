@@ -87,5 +87,5 @@ or map rebuild before restarting:
 .\gradlew.bat --no-daemon :or-cache:buildCache
 ```
 
-Generated shops currently use a proven 22-slot render inventory, so stock is capped at 22 rows until
-a larger shop render inventory is tested.
+Generated shops currently use a 28-slot OSRS shop render inventory, so stock is capped at 28 rows.
+Larger shops should be split or given a larger tested render inventory.

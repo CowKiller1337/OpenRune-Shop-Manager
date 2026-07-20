@@ -46,5 +46,5 @@ For newly spawned shop NPC copies, rebuild the cache/map data and restart the se
 .\gradlew.bat --no-daemon :or-cache:buildCache
 ```
 
-The current runtime uses a proven 22-slot shop render inventory, so generated shops are capped at
-22 stock rows until a larger render inventory is tested.
+The current runtime uses a 28-slot OSRS shop render inventory, so generated shops are capped at
+28 stock rows. Larger shops should be split or given a larger tested render inventory.
