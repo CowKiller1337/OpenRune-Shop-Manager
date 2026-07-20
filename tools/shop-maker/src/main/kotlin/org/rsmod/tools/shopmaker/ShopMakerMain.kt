@@ -930,7 +930,7 @@ private fun nativeShopScriptPath(marker: String): String =
 private fun nativeShopClassName(marker: String): String =
     marker.split('_')
         .filter { it.isNotBlank() }
-        .joinToString(prefix = "ShopMaker") { part ->
+        .joinToString(separator = "", prefix = "ShopMaker") { part ->
             part.replace(Regex("""[^A-Za-z0-9]"""), "")
                 .replaceFirstChar { char -> char.uppercase() }
         }
