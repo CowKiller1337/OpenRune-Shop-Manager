@@ -50,7 +50,28 @@ fun main() {
     }
 }
 
-private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop Manager") {
+class ShopMakerFrame(repoRoot: Path) : JFrame("OpenRune Shop Manager") {
+    init {
+        defaultCloseOperation = DISPOSE_ON_CLOSE
+        val panel = ShopMakerPanel(repoRoot)
+        minimumSize = panel.minimumSize
+        preferredSize = panel.preferredSize
+        contentPane.add(panel, BorderLayout.CENTER)
+        pack()
+        setLocationRelativeTo(null)
+    }
+}
+
+fun createShopMakerPanel(repoRoot: Path): JPanel =
+    if (ensureShopMakerCompatibility(repoRoot)) {
+        ShopMakerPanel(repoRoot)
+    } else {
+        JPanel(BorderLayout()).apply {
+            add(JLabel("Shop Manager support was not installed."), BorderLayout.CENTER)
+        }
+    }
+
+class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private val shopName = JTextField("New Shop")
     private val shopSlug = JTextField()
     private val worldX = JTextField()
@@ -80,10 +101,8 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private var shopMode = ShopMode.RECREATE_EXISTING
 
     init {
-        defaultCloseOperation = DISPOSE_ON_CLOSE
         minimumSize = Dimension(1180, 760)
         preferredSize = Dimension(1280, 820)
-        layout = BorderLayout(8, 8)
 
         npcList.selectionMode = ListSelectionModel.SINGLE_SELECTION
         itemList.selectionMode = ListSelectionModel.SINGLE_SELECTION
@@ -94,8 +113,6 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
 
         add(buildMainPanel(), BorderLayout.CENTER)
         add(status.withPadding(), BorderLayout.SOUTH)
-        pack()
-        setLocationRelativeTo(null)
 
         shopName.document.addDocumentListener(SimpleDocumentListener { updateDerivedSlug() })
         npcSearch.document.addDocumentListener(SimpleDocumentListener { refreshNpcList() })

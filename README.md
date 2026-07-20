@@ -20,6 +20,7 @@ parameter by hand. It is designed as a drop-in Gradle module for an OpenRune ser
 Copy these files into the root of an OpenRune server project:
 
 - `tools/shop-maker`
+- `tools/shop-manager-intellij`
 - `shop-manager.bat`
 
 Then add the module to `settings.gradle.kts`:
@@ -27,11 +28,12 @@ Then add the module to `settings.gradle.kts`:
 ```kotlin
 include(
     "tools:shop-maker",
+    "tools:shop-manager-intellij",
 )
 ```
 
-If your `settings.gradle.kts` already has an `include(...)` block, add only `"tools:shop-maker"`
-inside the existing list.
+If your `settings.gradle.kts` already has an `include(...)` block, add only the two `tools:*`
+entries inside the existing list.
 
 Optionally add a root Gradle shortcut to `build.gradle.kts`:
 
@@ -56,6 +58,27 @@ Or double-click:
 ```powershell
 shop-manager.bat
 ```
+
+## IntelliJ Plugin
+
+The IntelliJ plugin embeds the same Shop Manager UI as a right-side tool window named
+**OpenRune Shops**.
+
+Build it from the OpenRune server root after copying the files and adding the Gradle include:
+
+```powershell
+.\gradlew.bat --no-daemon :tools:shop-manager-intellij:buildPlugin
+```
+
+Install the generated plugin ZIP from:
+
+```text
+tools/shop-manager-intellij/build/distributions
+```
+
+In IntelliJ IDEA, use **Settings > Plugins > Install Plugin from Disk...**, select the ZIP, restart
+the IDE, then open an OpenRune server project. The tool window appears only when the opened project
+has the expected OpenRune data folders.
 
 ## How To Use
 

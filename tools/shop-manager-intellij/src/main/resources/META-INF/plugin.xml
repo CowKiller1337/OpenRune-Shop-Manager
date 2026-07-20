@@ -1,0 +1,20 @@
+<idea-plugin>
+    <id>org.rsmod.tools.shopmanager</id>
+    <name>OpenRune Shop Manager</name>
+    <version>0.1.0</version>
+    <vendor>CowKiller1337</vendor>
+
+    <description><![CDATA[
+        <p>Edit OpenRune shop inventories from inside IntelliJ IDEA.</p>
+    ]]></description>
+
+    <idea-version since-build="243"/>
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+            id="OpenRune Shops"
+            anchor="right"
+            factoryClass="org.rsmod.tools.shopmaker.intellij.OpenRuneShopManagerToolWindowFactory"/>
+    </extensions>
+</idea-plugin>
