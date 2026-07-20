@@ -55,7 +55,6 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private val worldX = JTextField()
     private val worldY = JTextField()
     private val level = JTextField("0")
-    private val coordPaste = JTextField()
     private val buyMultiplier = JSpinner(SpinnerNumberModel(600, 0, 10_000, 10))
     private val sellMultiplier = JSpinner(SpinnerNumberModel(1000, 0, 10_000, 10))
     private val changeDelta = JSpinner(SpinnerNumberModel(20, 0, 10_000, 1))
@@ -63,7 +62,6 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private val createCustomButton = JButton("Create custom")
     private val loadSelectedShopButton = JButton("Load selected shop")
     private val loadSavedShopButton = JButton("Load saved shop")
-    private val parseCoordsButton = JButton("Parse pasted coords")
     private val saveShopButton = JButton("Save shop")
     private val modeInfo = JLabel()
     private val npcHint = JLabel()
@@ -104,7 +102,6 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         createCustomButton.addActionListener { setShopMode(ShopMode.CREATE_CUSTOM) }
         loadSelectedShopButton.addActionListener { loadSelectedNpcShop() }
         loadSavedShopButton.addActionListener { loadSavedShop() }
-        parseCoordsButton.addActionListener { parsePastedCoords() }
 
         loadCache()
         refreshModeUi()
@@ -166,7 +163,6 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         fields.addRow(row++, "World X", worldX)
         fields.addRow(row++, "World Y", worldY)
         fields.addRow(row++, "Level", level)
-        fields.addRow(row++, "Paste coords", coordPaste)
         fields.addRow(row++, "Buy multiplier", buyMultiplier)
         fields.addRow(row++, "Sell multiplier", sellMultiplier)
         fields.addRow(row++, "Price delta", changeDelta)
@@ -185,7 +181,6 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         loadActions.add(loadSavedShopButton)
 
         val editActions = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0))
-        editActions.add(parseCoordsButton)
         editActions.add(removeStock)
         editActions.add(makePreview)
         editActions.add(saveShopButton)
@@ -222,7 +217,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
 
         val help = JLabel(
             "<html><b>But why?</b> Recreating an existing Trade NPC is the safer option. " +
-                "Creating a custom shop can spawn a new copy, but it needs coordinates and a rebuild.</html>",
+                "Creating a custom shop can spawn a new copy, but it needs X/Y/level and a rebuild.</html>",
         )
 
         panel.add(buttons, BorderLayout.NORTH)
@@ -241,12 +236,10 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         val custom = shopMode == ShopMode.CREATE_CUSTOM
         recreateExistingButton.isEnabled = custom
         createCustomButton.isEnabled = !custom
-        parseCoordsButton.isEnabled = custom
         saveShopButton.text = if (custom) "Place shop" else "Save shop"
         worldX.isEnabled = custom
         worldY.isEnabled = custom
         level.isEnabled = custom
-        coordPaste.isEnabled = custom
         npcHint.text =
             if (custom) {
                 "Create custom: shows Trade-capable NPC models. You choose where the new copy stands."
@@ -255,8 +248,8 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
             }
         modeInfo.text =
             if (custom) {
-                "<html><b>Create custom:</b> choose a Trade-capable NPC model, add stock, paste the " +
-                    "tile where the new shop copy should stand, then rebuild cache/map data and restart.</html>"
+                "<html><b>Create custom:</b> choose a Trade-capable NPC model, add stock, enter the " +
+                    "world X/Y/level where the new shop copy should stand, then rebuild cache/map data and restart.</html>"
             } else {
                 "<html><b>Recreate existing:</b> choose an in-world shop NPC. This only changes the " +
                     "shop stock, title, and prices. It does not move the NPC. Use Create custom if " +
@@ -439,7 +432,6 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
         buyMultiplier.value = shop.buyMultiplier
         sellMultiplier.value = shop.sellMultiplier
         changeDelta.value = shop.changeDelta
-        coordPaste.text = ""
         if (shop.coord != null) {
             worldX.text = shop.coord.x.toString()
             worldY.text = shop.coord.y.toString()
@@ -457,22 +449,7 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
             npcList.setSelectedValue(selectedNpc, true)
         }
         preview.text = ""
-        status.text = "Loaded ${shop.title}. Edit it, then place shop to save the changes."
-    }
-
-    private fun parsePastedCoords() {
-        val parsed = parseCoords(coordPaste.text)
-        if (parsed == null) {
-            JOptionPane.showMessageDialog(
-                this,
-                "Paste text like 'World 1503, 5570, 0', '1503,5570,0', or '0_23_87_31_34'.",
-            )
-            return
-        }
-        worldX.text = parsed.x.toString()
-        worldY.text = parsed.y.toString()
-        level.text = parsed.level.toString()
-        status.text = "Parsed world tile ${parsed.label} (${parsed.toCoordGridString()})."
+        status.text = "Loaded ${shop.title}. Edit it, then save the changes."
     }
 
     private fun previewShop() {

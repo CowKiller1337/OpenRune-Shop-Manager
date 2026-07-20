@@ -63,8 +63,8 @@ Use **Recreate existing** when you want to change a shop that already exists in 
 mode only changes the shop title, prices, and stock. It does not move the NPC. If you want a shop
 at different coordinates, use **Create custom**.
 
-Use **Create custom** when you want to place a new shop NPC copy. Paste a world tile or coord-grid
-value into the coordinate box, build the stock, and place the shop.
+Use **Create custom** when you want to place a new shop NPC copy. Enter the world X/Y/level, build
+the stock, and place the shop.
 
 To edit instead of starting over:
 
