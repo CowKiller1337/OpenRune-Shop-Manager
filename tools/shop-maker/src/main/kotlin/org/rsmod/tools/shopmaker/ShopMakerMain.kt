@@ -266,9 +266,11 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
                 publish("Indexing NPCs and items...")
                 val spawnedNpcs = loadSpawnedNpcInternals(repoRoot)
                 val shopParams = ShopParamIds.load(repoRoot)
+                val rawShopIndex = loadRawShopIndex(repoRoot)
+                val scriptedShopLinks = loadScriptedShopLinks(repoRoot, rawShopIndex)
                 return LookupData(
                     npcs = ServerCacheManager.getNpcs().values
-                        .mapNotNull { it.toLookupEntry(spawnedNpcs, shopParams) }
+                        .mapNotNull { it.toLookupEntry(spawnedNpcs, shopParams, rawShopIndex, scriptedShopLinks) }
                         .sortedWith(
                             compareBy<LookupEntry> { !it.isExistingShopNpc }
                                 .thenBy { !it.hasTrade }
@@ -355,16 +357,27 @@ private class ShopMakerFrame(private val repoRoot: Path) : JFrame("OpenRune Shop
     private fun loadSelectedNpcShop() {
         try {
             val selectedNpc = npcList.selectedValue ?: error("Pick a shop NPC first.")
-            val inventoryId = selectedNpc.shopInventoryId ?: error("That NPC does not have shop stock attached.")
-            val inventory = ServerCacheManager.getInventory(inventoryId)
-                ?: error("Could not find the shop inventory for ${selectedNpc.name}.")
-            val stock = inventory.stock.map { stock ->
-                StockEntry(
-                    item = lookup.itemById(stock.obj),
-                    count = stock.count,
-                    restockCycles = stock.restockCycles,
-                )
-            }
+            val stock =
+                if (selectedNpc.shopStock.isNotEmpty()) {
+                    selectedNpc.shopStock.map { stock ->
+                        StockEntry(
+                            item = lookup.itemByInternal(stock.itemInternal),
+                            count = stock.count,
+                            restockCycles = stock.restockCycles,
+                        )
+                    }
+                } else {
+                    val inventoryId = selectedNpc.shopInventoryId ?: error("That NPC does not have shop stock attached.")
+                    val inventory = ServerCacheManager.getInventory(inventoryId)
+                        ?: error("Could not find the shop inventory for ${selectedNpc.name}.")
+                    inventory.stock.map { stock ->
+                        StockEntry(
+                            item = lookup.itemById(stock.obj),
+                            count = stock.count,
+                            restockCycles = stock.restockCycles,
+                        )
+                    }
+                }
             require(stock.isNotEmpty()) { "That shop has no stock rows to load." }
 
             val slug = selectedNpc.shopInventoryInternal
@@ -606,6 +619,7 @@ private data class LookupEntry(
     val shopBuyMultiplier: Int? = null,
     val shopSellMultiplier: Int? = null,
     val shopChangeDelta: Int? = null,
+    val shopStock: List<RawStockEntry> = emptyList(),
     val cost: Int = 0,
 ) {
     val isExistingShopNpc: Boolean
@@ -633,6 +647,47 @@ private data class StockEntry(
     var count: Int,
     var restockCycles: Int,
 )
+
+private data class RawStockEntry(
+    val itemInternal: String,
+    val count: Int,
+    val restockCycles: Int,
+)
+
+private data class ShopInventoryInfo(
+    val internal: String,
+    val title: String,
+    val buyMultiplier: Int,
+    val sellMultiplier: Int,
+    val changeDelta: Int,
+    val stock: List<RawStockEntry>,
+)
+
+private data class RawShopIndex(
+    val byInternal: Map<String, ShopInventoryInfo>,
+) {
+    private val shops: List<ShopInventoryInfo> = byInternal.values.toList()
+
+    fun byInternal(internal: String?): ShopInventoryInfo? =
+        internal?.let { byInternal[it] }
+
+    fun matchNpc(name: String, internal: String): ShopInventoryInfo? {
+        val candidates =
+            sequenceOf(name, internal.removePrefix("npc.").replace('_', ' '))
+                .map(::shopSearchKey)
+                .filter { it.length >= 3 && it !in GENERIC_SHOP_MATCH_KEYS }
+                .flatMap { key -> sequenceOf(key, "${key}s") }
+                .distinct()
+                .toList()
+        if (candidates.isEmpty()) {
+            return null
+        }
+        return shops.firstOrNull { shop ->
+            val titleKey = shopSearchKey(shop.title)
+            candidates.any { candidate -> candidate in titleKey }
+        }
+    }
+}
 
 private data class LoadedShop(
     val label: String,
@@ -1124,6 +1179,79 @@ private fun loadSpawnedNpcInternals(root: Path): Set<String> {
     }
 }
 
+private fun loadRawShopIndex(root: Path): RawShopIndex {
+    val dir = root.resolve(RAW_SHOPS_DIR)
+    if (!Files.isDirectory(dir)) {
+        return RawShopIndex(emptyMap())
+    }
+    val shops =
+        Files.walk(dir).use { paths ->
+            paths.iterator().asSequence()
+                .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".toml") }
+                .flatMap { file -> inventoryBlocks(Files.readString(file)).asSequence() }
+                .mapNotNull(::parseShopInventoryInfo)
+                .associateBy { it.internal }
+        }
+    return RawShopIndex(shops)
+}
+
+private fun inventoryBlocks(text: String): List<String> {
+    val pattern = Regex("""(?s)\[\[inventory]](.*?)(?=\R\[\[inventory]]|\z)""")
+    return pattern.findAll(text).map { it.groupValues[1] }.toList()
+}
+
+private fun parseShopInventoryInfo(block: String): ShopInventoryInfo? {
+    val internal = tomlStringValue(block, "id")?.takeIf { it.startsWith("inv.") } ?: return null
+    return ShopInventoryInfo(
+        internal = internal,
+        title = tomlStringValue(block, "name") ?: internal.removePrefix("inv.").replace('_', ' '),
+        buyMultiplier = tomlIntValue(block, "buyMultiplier") ?: 600,
+        sellMultiplier = tomlIntValue(block, "sellMultiplier") ?: 1000,
+        changeDelta = tomlIntValue(block, "delta") ?: 20,
+        stock = rawInventoryStockRows(block),
+    )
+}
+
+private fun rawInventoryStockRows(block: String): List<RawStockEntry> {
+    val stockBlock = Regex("""(?s)\[\[inventory\.stock]](.*?)(?=\R\[\[inventory\.stock]]|\z)""")
+    return stockBlock.findAll(block)
+        .mapNotNull { match ->
+            val text = match.groupValues[1]
+            val itemInternal = tomlStringValue(text, "obj") ?: return@mapNotNull null
+            RawStockEntry(
+                itemInternal = itemInternal,
+                count = tomlIntValue(text, "count") ?: 0,
+                restockCycles = tomlIntValue(text, "restockCycles") ?: 100,
+            )
+        }
+        .toList()
+}
+
+private fun loadScriptedShopLinks(root: Path, rawShopIndex: RawShopIndex): Map<String, ShopInventoryInfo> {
+    val contentDir = root.resolve("content")
+    if (!Files.isDirectory(contentDir)) {
+        return emptyMap()
+    }
+    val links = mutableMapOf<String, ShopInventoryInfo>()
+    val npcPattern = Regex("""onOpNpc\d\s*\(\s*"([^"]+)"""")
+    val shopOpenPattern =
+        Regex("""shops\.open\s*\((?s:.*?)"[^"]+"\s*,\s*"(inv\.[^"]+)"""")
+    Files.walk(contentDir).use { paths ->
+        paths.iterator().asSequence()
+            .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".kt") }
+            .forEach { file ->
+                val text = Files.readString(file)
+                val npcs = npcPattern.findAll(text).map { it.groupValues[1] }.filter { it.startsWith("npc.") }.toSet()
+                val shopInvs = shopOpenPattern.findAll(text).map { it.groupValues[1] }.toSet()
+                if (npcs.isNotEmpty() && shopInvs.size == 1) {
+                    val shop = rawShopIndex.byInternal(shopInvs.single()) ?: return@forEach
+                    npcs.forEach { npc -> links.putIfAbsent(npc, shop) }
+                }
+            }
+    }
+    return links
+}
+
 private fun gamevalId(file: Path, key: String): Int? = existingGameval(file, key)
 
 private fun Any?.asParamInt(): Int? =
@@ -1140,7 +1268,15 @@ private fun safeReverseMapping(type: RSCMType, id: Int): String =
         .takeUnless { it == "-1" }
         ?: "${type.prefix}.$id"
 
-private fun NpcServerType.toLookupEntry(spawnedNpcs: Set<String>, shopParams: ShopParamIds): LookupEntry? {
+private fun shopSearchKey(value: String): String =
+    value.lowercase().filter { it.isLetterOrDigit() }
+
+private fun NpcServerType.toLookupEntry(
+    spawnedNpcs: Set<String>,
+    shopParams: ShopParamIds,
+    rawShopIndex: RawShopIndex,
+    scriptedShopLinks: Map<String, ShopInventoryInfo>,
+): LookupEntry? {
     val internal = runCatching { internalName }.getOrNull()?.takeIf { it.startsWith("npc.") } ?: return null
     val ops = (1..5).mapNotNull { slot ->
         actions.getOpOrNull(slot - 1)
@@ -1149,8 +1285,15 @@ private fun NpcServerType.toLookupEntry(spawnedNpcs: Set<String>, shopParams: Sh
             ?.let { "$slot:$it" }
     }
     val hasTrade = ops.any { it.substringAfter(':').equals("trade", ignoreCase = true) }
-    val shopInventoryId = paramsRaw?.get(shopParams.inventory).asParamInt()
-    val hasShopInventory = shopInventoryId != null
+    val paramShopInventoryId = paramsRaw?.get(shopParams.inventory).asParamInt()
+    val paramShopInventoryInternal = paramShopInventoryId?.let { safeReverseMapping(RSCMType.INV, it) }
+    val linkedShop =
+        rawShopIndex.byInternal(paramShopInventoryInternal)
+            ?: scriptedShopLinks[internal]
+            ?: rawShopIndex.matchNpc(name, internal)
+    val shopInventoryId =
+        paramShopInventoryId ?: linkedShop?.internal?.let { runCatching { RSCM.getRSCM(it) }.getOrNull() }
+    val hasShopInventory = paramShopInventoryId != null || linkedShop != null
     return LookupEntry(
         id = id,
         internal = internal,
@@ -1160,11 +1303,12 @@ private fun NpcServerType.toLookupEntry(spawnedNpcs: Set<String>, shopParams: Sh
         hasShopInventory = hasShopInventory,
         isSpawned = internal in spawnedNpcs,
         shopInventoryId = shopInventoryId,
-        shopInventoryInternal = shopInventoryId?.let { safeReverseMapping(RSCMType.INV, it) },
-        shopTitle = paramsRaw?.get(shopParams.name) as? String,
-        shopBuyMultiplier = paramsRaw?.get(shopParams.buyPercentage).asParamInt(),
-        shopSellMultiplier = paramsRaw?.get(shopParams.sellPercentage).asParamInt(),
-        shopChangeDelta = paramsRaw?.get(shopParams.changePercentage).asParamInt(),
+        shopInventoryInternal = paramShopInventoryInternal ?: linkedShop?.internal,
+        shopTitle = paramsRaw?.get(shopParams.name) as? String ?: linkedShop?.title,
+        shopBuyMultiplier = paramsRaw?.get(shopParams.buyPercentage).asParamInt() ?: linkedShop?.buyMultiplier,
+        shopSellMultiplier = paramsRaw?.get(shopParams.sellPercentage).asParamInt() ?: linkedShop?.sellMultiplier,
+        shopChangeDelta = paramsRaw?.get(shopParams.changePercentage).asParamInt() ?: linkedShop?.changeDelta,
+        shopStock = linkedShop?.stock.orEmpty(),
     )
 }
 
@@ -1403,6 +1547,7 @@ private const val SHOPS_API_DEPENDENCY = "implementation(projects.api.shops)"
 private const val CUSTOM_SHOPS_TOML = ".data/raw-cache/server/shops/custom_shops.toml"
 private const val CUSTOM_SHOP_NPCS_TOML = ".data/raw-cache/server/custom_shop_npcs.toml"
 private const val CUSTOM_SHOP_SPAWNS_TOML = ".data/raw-cache/map/npcs/custom_shops.toml"
+private const val RAW_SHOPS_DIR = ".data/raw-cache/server/shops"
 private const val NPC_GAMEVALS = ".data/gamevals/npc.rscm"
 private const val INV_GAMEVALS = ".data/gamevals/inv.rscm"
 private const val PARAM_GAMEVALS = ".data/gamevals/param.rscm"
@@ -1414,6 +1559,17 @@ private const val SHOP_BUY_PERCENTAGE_PARAM_ID = 65498
 private const val SHOP_CHANGE_PERCENTAGE_PARAM_ID = 65499
 private val NPC_CUSTOM_ID_RANGE = 16294..16383
 private val INV_CUSTOM_ID_RANGE = 1027..4095
+private val GENERIC_SHOP_MATCH_KEYS =
+    setOf(
+        "shop",
+        "shopkeeper",
+        "shop" + "assist" + "ant",
+        "assist" + "ant",
+        "generalshopkeeper",
+        "general" + "assist" + "ant",
+        "trader",
+        "merchant",
+    )
 
 private val GENERATED_SHOP_TOML_FILES =
     listOf(
