@@ -230,7 +230,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     }
 
     private fun refreshModeUi() {
-        saveShopButton.text = "Save native shop"
+        saveShopButton.text = "Save / Fix shop"
         npcHint.text = "Shows in-world Trade NPCs with native shop data."
         modeInfo.text =
             "<html><b>Recreate existing:</b> choose an in-world shop NPC. This saves the native shop stock " +
@@ -242,7 +242,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         object : SwingWorker<LookupData, String>() {
             override fun doInBackground(): LookupData {
                 publish("Loading cache definitions...")
-                ServerCacheManager.init(239)
+                loadServerCache(repoRoot)
                 publish("Indexing NPCs and items...")
                 val spawnedNpcRegions = loadSpawnedNpcRegions(repoRoot)
                 val shopParams = ShopParamIds.load(repoRoot)
@@ -426,7 +426,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             status.text = "Saved ${spec.shopTitle}. Rebuild cache and restart server before testing."
             JOptionPane.showMessageDialog(
                 this,
-                "Shop saved. Rebuild cache with :or-cache:buildCache, then restart the server.",
+                "Shop saved/fixed. Rebuild cache with :or-cache:buildCache, then restart the server.",
             )
         } catch (e: Exception) {
             showError("Could not place shop.", e)
@@ -1199,6 +1199,16 @@ private fun NpcServerType.toLookupEntry(
         scriptedShopInternal = scriptedShop?.internal,
         hasNativeTradeScript = hasNativeTradeScript,
     )
+}
+
+private fun loadServerCache(repoRoot: Path) {
+    val previousUserDir = System.getProperty("user.dir")
+    try {
+        System.setProperty("user.dir", repoRoot.toString())
+        ServerCacheManager.init(239)
+    } finally {
+        System.setProperty("user.dir", previousUserDir)
+    }
 }
 
 private fun ItemServerType.toLookupEntry(): LookupEntry? {
