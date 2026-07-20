@@ -1230,7 +1230,7 @@ private fun ensureInventoryCodecCompatibility(repoRoot: Path): Boolean {
     val text = Files.readString(file)
     val newline = if ("\r\n" in text) "\r\n" else "\n"
     val normalized = text.replace("\r\n", "\n")
-    if (normalized.contains(INVENTORY_CODEC_PATCH_MARKER)) {
+    if (hasInventoryCodecSupport(normalized)) {
         return true
     }
     val sourceBlock =
@@ -1356,6 +1356,19 @@ private fun loadBundledCustomShopRuntimeScript(): String {
     val stream = Thread.currentThread().contextClassLoader.getResourceAsStream(CUSTOM_SHOP_RUNTIME_RESOURCE)
         ?: error("Missing resource: $CUSTOM_SHOP_RUNTIME_RESOURCE")
     return stream.bufferedReader().use { it.readText() }.trimEnd() + "\n"
+}
+
+private fun hasInventoryCodecSupport(source: String): Boolean {
+    val hasCustomData = "val customData = custom?.get(id)" in source
+    val allowsCustomOnlyInventory = Regex(
+        """if\s*\(\s*inventoryType\s*==\s*null\s*&&\s*customData\s*==\s*null\s*\)\s*\{\s*return\s*}""",
+        RegexOption.DOT_MATCHES_ALL,
+    ).containsMatchIn(source)
+    val copiesCustomSize = Regex(
+        """if\s*\(\s*inventoryType\s*==\s*null\s*\)\s*\{\s*size\s*=\s*customData\.size\s*}""",
+        RegexOption.DOT_MATCHES_ALL,
+    ).containsMatchIn(source)
+    return hasCustomData && allowsCustomOnlyInventory && copiesCustomSize
 }
 
 private fun ensureGradleDependency(file: Path, dependency: String) {
