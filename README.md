@@ -62,6 +62,19 @@ In IntelliJ IDEA, use **Settings > Plugins > Install Plugin from Disk...**, sele
 the IDE, then open an OpenRune server project. The tool window appears only when the opened project
 has the expected OpenRune data folders.
 
+## Update Existing Plugin
+
+If an older OpenRune Shop Manager plugin is already installed:
+
+- Open **Settings > Plugins > Installed**.
+- Search for **OpenRune Shop Manager**.
+- Uninstall it, then restart IntelliJ.
+- Install the new ZIP with **Install Plugin from Disk...**.
+- Restart IntelliJ again.
+
+If IntelliJ still shows the old UI, confirm the installed plugin version matches the newest ZIP and
+restart the IDE once more.
+
 ## How To Use
 
 Use the tool when you want to change a shop that already exists in the world. It changes the shop
