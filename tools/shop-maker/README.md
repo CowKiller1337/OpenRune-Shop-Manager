@@ -25,6 +25,14 @@ Basic flow:
 If an NPC already has a hand-written Trade script, the tool will not generate a duplicate Trade
 handler.
 
+Button/actions:
+
+- **Load selected shop** loads the chosen NPC's current shop stock.
+- **Add selected item** adds the highlighted cache item to the stock table.
+- **Remove stock row** removes the highlighted stock row.
+- **Preview** shows the files that will be changed.
+- **Save / Fix shop** writes the shop stock and, when needed, a normal native Trade script.
+
 Existing shop edits update the matching native shop TOML under:
 
 - `.data/raw-cache/server/shops/*.toml`

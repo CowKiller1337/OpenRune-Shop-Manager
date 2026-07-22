@@ -81,7 +81,6 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private val changeDelta = JSpinner(SpinnerNumberModel(20, 0, 10_000, 1))
     private val loadSelectedShopButton = JButton("Load selected shop")
     private val saveShopButton = JButton("Save shop")
-    private val modeInfo = JLabel()
     private val npcHint = JLabel()
 
     private val npcSearch = JTextField()
@@ -194,7 +193,6 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         fields.addRow(row++, "Buy multiplier", buyMultiplier)
         fields.addRow(row++, "Sell multiplier", sellMultiplier)
         fields.addRow(row++, "Price delta", changeDelta)
-        north.add(buildModePanel(), BorderLayout.NORTH)
         north.add(fields, BorderLayout.CENTER)
 
         val removeStock = JButton("Remove stock row")
@@ -217,12 +215,16 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         val stockTable = JTable(stockModel)
         stockTable.fillsViewportHeight = true
 
+        val stockScroll = JScrollPane(stockTable)
+        stockScroll.minimumSize = Dimension(320, 180)
+        val previewScroll = JScrollPane(preview)
+        previewScroll.minimumSize = Dimension(320, 90)
         val center = JSplitPane(
             JSplitPane.VERTICAL_SPLIT,
-            JScrollPane(stockTable),
-            JScrollPane(preview),
+            stockScroll,
+            previewScroll,
         )
-        center.resizeWeight = 0.45
+        center.resizeWeight = 0.78
 
         panel.add(north, BorderLayout.NORTH)
         panel.add(center, BorderLayout.CENTER)
@@ -230,31 +232,9 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         return panel
     }
 
-    private fun buildModePanel(): JPanel {
-        val panel = JPanel(BorderLayout(8, 8))
-        panel.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createTitledBorder("Start here"),
-            BorderFactory.createEmptyBorder(4, 6, 6, 6),
-        )
-
-        val help = JLabel(
-            "<html><b>Native existing shops:</b> edit the stock for an existing `inv.*` shop. " +
-                "If the NPC is missing a Trade script, the tool writes a normal OpenRune script " +
-                "that calls `shops.open(...)`.</html>",
-        )
-
-        panel.add(modeInfo, BorderLayout.CENTER)
-        panel.add(help, BorderLayout.SOUTH)
-        return panel
-    }
-
     private fun refreshModeUi() {
         saveShopButton.text = "Save / Fix shop"
         npcHint.text = "Shows in-world Trade NPCs with native shop data."
-        modeInfo.text =
-            "<html><b>Recreate existing:</b> choose an in-world shop NPC. This saves the native shop stock " +
-                "and repairs the Trade click with a normal OpenRune shop script when one is missing. " +
-                "It does not move the NPC or create new NPC data.</html>"
     }
 
     private fun loadCache() {
