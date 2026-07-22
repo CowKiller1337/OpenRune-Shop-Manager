@@ -1,9 +1,9 @@
 # OpenRune Shop Manager
 
-A desktop and IntelliJ shop editor for OpenRune server projects.
+An IntelliJ shop editor for OpenRune server projects.
 
 The tool edits existing native OpenRune shops without manually writing every inventory parameter by
-hand. It is designed as a drop-in Gradle module for an OpenRune server checkout.
+hand. It is designed as a drop-in IntelliJ plugin source module for an OpenRune server checkout.
 
 ## Features
 
@@ -21,65 +21,30 @@ hand. It is designed as a drop-in Gradle module for an OpenRune server checkout.
 Copy these files into the root of an OpenRune server project:
 
 - `tools/shop-maker`
-- `shop-manager.bat`
+- `tools/shop-manager-intellij`
 
-Then add the module to `settings.gradle.kts`:
+`tools/shop-maker` is the shared editor module used by the plugin. Users do not need to run it as a
+desktop app.
+
+Then add the modules to `settings.gradle.kts`:
 
 ```kotlin
 include("tools:shop-maker")
-```
-
-The IntelliJ plugin is optional. To install its source too, copy:
-
-- `tools/shop-manager-intellij`
-
-Then add:
-
-```kotlin
 include("tools:shop-manager-intellij")
 ```
 
-Optionally add a root Gradle shortcut to `build.gradle.kts`:
-
-```kotlin
-tasks.register("shopManager") {
-    group = "application"
-    description = "Opens the OpenRune shop manager desktop tool."
-    dependsOn(":tools:shop-maker:run")
-}
-```
-
-## Run
+## Build Plugin
 
 From the OpenRune server root:
 
-Windows:
-
 ```text
-.\gradlew.bat --no-daemon :tools:shop-maker:run
-```
-
-Or double-click:
-
-```text
-shop-manager.bat
+.\gradlew.bat --no-daemon :tools:shop-manager-intellij:buildPlugin
 ```
 
 Linux/macOS:
 
 ```text
-./gradlew --no-daemon :tools:shop-maker:run
-```
-
-## IntelliJ Plugin
-
-The IntelliJ plugin embeds the same Shop Manager UI as a right-side tool window named
-**OpenRune Shops**.
-
-Build it from the OpenRune server root after copying the files and adding the Gradle include:
-
-```text
-.\gradlew.bat --no-daemon :tools:shop-manager-intellij:buildPlugin
+./gradlew --no-daemon :tools:shop-manager-intellij:buildPlugin
 ```
 
 Install the generated plugin ZIP from:
@@ -87,6 +52,11 @@ Install the generated plugin ZIP from:
 ```text
 tools/shop-manager-intellij/build/distributions
 ```
+
+## IntelliJ Plugin
+
+The IntelliJ plugin embeds the same Shop Manager UI as a right-side tool window named
+**OpenRune Shops**.
 
 In IntelliJ IDEA, use **Settings > Plugins > Install Plugin from Disk...**, select the ZIP, restart
 the IDE, then open an OpenRune server project. The tool window appears only when the opened project

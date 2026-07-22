@@ -1,24 +1,7 @@
 # OpenRune Shop Manager
 
-Open the desktop tool with:
-
-Windows:
-
-```text
-.\gradlew.bat :tools:shop-maker:run
-```
-
-Or, from the OpenRune server root after installing on Windows:
-
-```text
-.\shop-manager.bat
-```
-
-Linux/macOS:
-
-```text
-./gradlew :tools:shop-maker:run
-```
+This module contains the shared editor UI used by the IntelliJ plugin. End users should install and
+open the **OpenRune Shops** IntelliJ tool window instead of launching this module directly.
 
 The tool reads the built server cache, lets you pick an existing shop NPC, search cache items, and
 edit that shop's native stock.
