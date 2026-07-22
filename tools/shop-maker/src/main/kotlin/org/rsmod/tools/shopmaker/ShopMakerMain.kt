@@ -74,6 +74,8 @@ fun createShopMakerPanel(repoRoot: Path): JPanel =
 class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private val shopName = JTextField("New Shop")
     private val shopSlug = JTextField()
+    private val shopVariant = JComboBox<ShopInventoryInfo>()
+    private val shopCurrency = JComboBox<CurrencyOption>()
     private val buyMultiplier = JSpinner(SpinnerNumberModel(600, 0, 10_000, 10))
     private val sellMultiplier = JSpinner(SpinnerNumberModel(1000, 0, 10_000, 10))
     private val changeDelta = JSpinner(SpinnerNumberModel(20, 0, 10_000, 1))
@@ -91,7 +93,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private val preview = JTextArea()
     private val status = JLabel("Loading cache...")
 
-    private var lookup = LookupData(emptyList(), emptyList(), emptyList())
+    private var lookup = LookupData(emptyList(), emptyList(), emptyList(), listOf(CurrencyOption.StandardGp))
+    private var updatingShopVariant = false
 
     init {
         minimumSize = Dimension(1180, 760)
@@ -112,6 +115,19 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         npcRegion.addActionListener { refreshNpcList() }
         itemSearch.document.addDocumentListener(SimpleDocumentListener { refreshItemList() })
         loadSelectedShopButton.addActionListener { loadSelectedNpcShop() }
+        shopVariant.addActionListener {
+            if (!updatingShopVariant) {
+                loadSelectedShopVariant()
+            }
+        }
+        shopVariant.isEnabled = false
+        shopCurrency.isEnabled = CUSTOM_CURRENCY_SELECTION_ENABLED
+        shopCurrency.toolTipText =
+            if (CUSTOM_CURRENCY_SELECTION_ENABLED) {
+                "Select the item currency this shop should use."
+            } else {
+                "Custom currency selection is disabled until server currency handlers are confirmed."
+            }
 
         loadCache()
         refreshModeUi()
@@ -173,6 +189,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         var row = 0
         fields.addRow(row++, "Shop title", shopName)
         fields.addRow(row++, "Shop slug", shopSlug)
+        fields.addRow(row++, "Shop variant", shopVariant)
+        fields.addRow(row++, "Currency", shopCurrency)
         fields.addRow(row++, "Buy multiplier", buyMultiplier)
         fields.addRow(row++, "Sell multiplier", sellMultiplier)
         fields.addRow(row++, "Price delta", changeDelta)
@@ -249,6 +267,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 val shopParams = ShopParamIds.load(repoRoot)
                 val rawShopIndex = loadRawShopIndex(repoRoot)
                 val scriptedNpcIndex = loadScriptedNpcIndex(repoRoot, rawShopIndex)
+                val currencies = loadCurrencyOptions(repoRoot)
                 val regions = spawnedNpcRegions.values.flatten().distinct().sorted()
                 return LookupData(
                     npcs = ServerCacheManager.getNpcs().values
@@ -264,6 +283,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                     items = ServerCacheManager.getItems().values.mapNotNull { it.toLookupEntry() }
                         .sortedWith(compareBy<LookupEntry> { it.name }.thenBy { it.id }),
                     regions = regions,
+                    currencies = currencies,
                 )
             }
 
@@ -274,6 +294,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             override fun done() {
                 try {
                     lookup = get()
+                    shopCurrency.removeAllItems()
+                    lookup.currencies.forEach(shopCurrency::addItem)
                     npcRegion.removeAllItems()
                     npcRegion.addItem(ALL_REGIONS)
                     lookup.regions.forEach(npcRegion::addItem)
@@ -346,6 +368,14 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private fun loadSelectedNpcShop() {
         try {
             val selectedNpc = npcList.selectedValue ?: error("Pick a shop NPC first.")
+            val variants = selectedNpc.shopVariants
+            if (variants.isNotEmpty()) {
+                populateShopVariants(selectedNpc)
+                val variant = (shopVariant.selectedItem as? ShopInventoryInfo) ?: variants.first()
+                loadShopVariant(selectedNpc, variant)
+                return
+            }
+
             val stock =
                 if (selectedNpc.shopStock.isNotEmpty()) {
                     selectedNpc.shopStock.map { stock ->
@@ -377,6 +407,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 LoadedShop(
                     label = selectedNpc.name,
                     npcInternal = selectedNpc.internal,
+                    variantInternal = selectedNpc.shopInventoryInternal,
+                    currencyInternal = selectedNpc.shopCurrencyInternal,
                     title = selectedNpc.shopTitle ?: "${selectedNpc.name} Shop",
                     slug = slug,
                     buyMultiplier = selectedNpc.shopBuyMultiplier ?: DEFAULT_BUY_MULTIPLIER,
@@ -390,9 +422,70 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         }
     }
 
+    private fun loadSelectedShopVariant() {
+        try {
+            val selectedNpc = npcList.selectedValue ?: return
+            val variant = shopVariant.selectedItem as? ShopInventoryInfo ?: return
+            loadShopVariant(selectedNpc, variant)
+        } catch (e: Exception) {
+            showError("Could not load the selected shop variant.", e)
+        }
+    }
+
+    private fun loadShopVariant(selectedNpc: LookupEntry, variant: ShopInventoryInfo) {
+        val stock =
+            variant.stock.map { stock ->
+                StockEntry(
+                    item = lookup.itemByInternal(stock.itemInternal),
+                    count = stock.count,
+                    restockCycles = stock.restockCycles,
+                )
+            }
+        require(stock.isNotEmpty()) { "That shop has no stock rows to load." }
+
+        applyLoadedShop(
+            LoadedShop(
+                label = selectedNpc.name,
+                npcInternal = selectedNpc.internal,
+                variantInternal = variant.internal,
+                currencyInternal = selectedNpc.shopCurrencyInternal,
+                title = variant.title,
+                slug = variant.internal.removePrefix("inv.").takeIf { it.isNotBlank() }
+                    ?: variant.title.toSlug(),
+                buyMultiplier = variant.buyMultiplier,
+                sellMultiplier = variant.sellMultiplier,
+                changeDelta = variant.changeDelta,
+                stock = stock,
+            ),
+        )
+    }
+
+    private fun populateShopVariants(selectedNpc: LookupEntry, selectedInternal: String? = null) {
+        updatingShopVariant = true
+        try {
+            shopVariant.removeAllItems()
+            selectedNpc.shopVariants.forEach(shopVariant::addItem)
+            val selected =
+                selectedNpc.shopVariants.firstOrNull { it.internal == selectedInternal }
+                    ?: selectedNpc.shopVariants.firstOrNull()
+            if (selected != null) {
+                shopVariant.selectedItem = selected
+            }
+            shopVariant.isEnabled = selectedNpc.shopVariants.size > 1
+        } finally {
+            updatingShopVariant = false
+        }
+    }
+
     private fun applyLoadedShop(shop: LoadedShop) {
         shopSlug.text = shop.slug
         shopName.text = shop.title
+        shopCurrency.selectedItem =
+            if (CUSTOM_CURRENCY_SELECTION_ENABLED) {
+                lookup.currencyByInternal(shop.currencyInternal)
+            } else {
+                CurrencyOption.StandardGp
+            }
         buyMultiplier.value = shop.buyMultiplier
         sellMultiplier.value = shop.sellMultiplier
         changeDelta.value = shop.changeDelta
@@ -403,9 +496,11 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             npcRegion.selectedItem = ALL_REGIONS
             refreshNpcList()
             npcList.setSelectedValue(selectedNpc, true)
+            populateShopVariants(selectedNpc, shop.variantInternal)
         }
         preview.text = ""
-        status.text = "Loaded ${shop.title}. Edit it, then save the changes."
+        val variantText = shop.variantInternal?.let { " ($it)" } ?: ""
+        status.text = "Loaded ${shop.title}$variantText. Edit it, then save the changes."
     }
 
     private fun previewShop() {
@@ -441,8 +536,17 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         require(selectedNpc.isExistingShopNpc) {
             "Only in-world NPCs with native shop data can be edited."
         }
-        val rawShopInternal = selectedNpc.shopInventoryInternal ?: selectedNpc.scriptedShopInternal
+        val selectedVariant =
+            (shopVariant.selectedItem as? ShopInventoryInfo)
+                ?.takeIf { variant -> selectedNpc.shopVariants.any { it.internal == variant.internal } }
+        val rawShopInternal = selectedVariant?.internal ?: selectedNpc.shopInventoryInternal ?: selectedNpc.scriptedShopInternal
             ?: error("Could not identify the native shop inventory for ${selectedNpc.name}.")
+        val selectedCurrency =
+            if (CUSTOM_CURRENCY_SELECTION_ENABLED) {
+                shopCurrency.selectedItem as? CurrencyOption ?: CurrencyOption.StandardGp
+            } else {
+                CurrencyOption.StandardGp
+            }
         val slug = shopSlug.text.toSlug()
         require(slug.isNotBlank()) { "Shop slug cannot be empty." }
         require(stockModel.rows.isNotEmpty()) { "Add at least one stock item." }
@@ -450,13 +554,25 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             "Generated shops currently support up to $MAX_RENDER_STOCK_ROWS stock rows. " +
                 "Split larger shops or add a larger render inventory first."
         }
+        val scriptMarker = "native_shop_${selectedNpc.internal.removePrefix("npc.").toSlug()}_" +
+            rawShopInternal.removePrefix("inv.").toSlug()
+        val generatedScriptExists = Files.exists(repoRoot.resolve(nativeShopScriptPath(scriptMarker)))
+        val writesNativeScript =
+            generatedScriptExists ||
+                (selectedNpc.scriptedShopInternal == null && !selectedNpc.hasNativeTradeScript)
+        require(selectedCurrency.isStandard || writesNativeScript) {
+            "${selectedNpc.name} already uses a hand-written native Trade script. " +
+                "The tool will not create a duplicate click handler. Add " +
+                "currency = ${selectedCurrency.internal.kotlinString()} to that script's shops.open call."
+        }
 
         return ShopSpec(
             shopTitle = shopName.text.trim().ifBlank { "Shop" },
             slug = slug,
             inheritedNpc = selectedNpc,
             rawShopInternal = rawShopInternal,
-            writeNativeScript = selectedNpc.scriptedShopInternal == null && !selectedNpc.hasNativeTradeScript,
+            currency = selectedCurrency,
+            writeNativeScript = writesNativeScript,
             buyMultiplier = buyMultiplier.value as Int,
             sellMultiplier = sellMultiplier.value as Int,
             changeDelta = changeDelta.value as Int,
@@ -476,6 +592,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         private const val DEFAULT_SELL_MULTIPLIER = 1000
         private const val DEFAULT_CHANGE_DELTA = 20
         private const val MAX_RENDER_STOCK_ROWS = 28
+        private const val CUSTOM_CURRENCY_SELECTION_ENABLED = false
     }
 }
 
@@ -483,9 +600,11 @@ private data class LookupData(
     val npcs: List<LookupEntry>,
     val items: List<LookupEntry>,
     val regions: List<String>,
+    val currencies: List<CurrencyOption>,
 ) {
     private val itemsById: Map<Int, LookupEntry> = items.associateBy { it.id }
     private val itemsByInternal: Map<String, LookupEntry> = items.associateBy { it.internal }
+    private val currenciesByInternal: Map<String, CurrencyOption> = currencies.associateBy { it.internal }
 
     fun itemById(id: Int): LookupEntry =
         itemsById[id] ?: LookupEntry(
@@ -506,6 +625,23 @@ private data class LookupData(
             hasTrade = false,
             regions = emptySet(),
         )
+
+    fun currencyByInternal(internal: String?): CurrencyOption =
+        internal?.let(currenciesByInternal::get) ?: CurrencyOption.StandardGp
+}
+
+private data class CurrencyOption(
+    val internal: String,
+    val label: String,
+    val objInternal: String? = null,
+) {
+    val isStandard: Boolean get() = internal == StandardGp.internal
+
+    override fun toString(): String = label
+
+    companion object {
+        val StandardGp = CurrencyOption("currency.standard_gp", "Coins (standard GP)", "obj.coins")
+    }
 }
 
 private data class LookupEntry(
@@ -524,12 +660,14 @@ private data class LookupEntry(
     val shopSellMultiplier: Int? = null,
     val shopChangeDelta: Int? = null,
     val shopStock: List<RawStockEntry> = emptyList(),
+    val shopVariants: List<ShopInventoryInfo> = emptyList(),
+    val shopCurrencyInternal: String = CurrencyOption.StandardGp.internal,
     val scriptedShopInternal: String? = null,
     val hasNativeTradeScript: Boolean = false,
     val cost: Int = 0,
 ) {
     val canOpenShop: Boolean
-        get() = hasTrade || scriptedShopInternal != null
+        get() = hasTrade || scriptedShopInternal != null || shopVariants.isNotEmpty()
 
     val isExistingShopNpc: Boolean
         get() = canOpenShop && hasShopInventory && isSpawned
@@ -560,9 +698,10 @@ private data class LookupEntry(
             val actionText = if (actions.isBlank()) "" else " | $actions"
             val scriptText = if (!hasTrade && scriptedShopInternal != null) " | scripted shop" else ""
             val tradeScriptText = if (hasTrade && hasNativeTradeScript) " | native Trade script" else ""
+            val variantText = if (shopVariants.size > 1) " | ${shopVariants.size} shop variants" else ""
             val regionText = if (regionLabel.isBlank()) "" else " | $regionLabel"
             val costText = if (cost > 0) " | ${cost}gp" else ""
-            return "$name [$id] $internal$regionText$actionText$scriptText$tradeScriptText$costText"
+            return "$name [$id] $internal$regionText$actionText$scriptText$tradeScriptText$variantText$costText"
         }
 
     fun matches(query: String): Boolean {
@@ -594,14 +733,30 @@ private data class ShopInventoryInfo(
     val sellMultiplier: Int,
     val changeDelta: Int,
     val stock: List<RawStockEntry>,
-)
+) {
+    override fun toString(): String = "$title ($internal)"
+}
 
 private data class ScriptedNpcIndex(
-    val shopLinks: Map<String, ShopInventoryInfo>,
+    val shopLinks: Map<String, List<ShopInventoryInfo>>,
+    val currencies: Map<String, String>,
     val opPatterns: List<NpcOpPattern>,
 ) {
     fun hasOp(npcInternal: String, opSlot: Int): Boolean =
         opPatterns.any { it.opSlot == opSlot && it.matches(npcInternal) }
+
+    fun shopsFor(npcInternal: String): List<ShopInventoryInfo> =
+        shopLinks.asSequence()
+            .filter { (npcPattern, _) -> NpcOpPattern(DEFAULT_TRADE_SLOT, npcPattern).matches(npcInternal) }
+            .flatMap { (_, shops) -> shops.asSequence() }
+            .distinctBy { it.internal }
+            .toList()
+
+    fun currencyFor(npcInternal: String): String =
+        currencies.asSequence()
+            .firstOrNull { (npcPattern, _) -> NpcOpPattern(DEFAULT_TRADE_SLOT, npcPattern).matches(npcInternal) }
+            ?.value
+            ?: CurrencyOption.StandardGp.internal
 }
 
 private data class NpcOpPattern(
@@ -670,6 +825,8 @@ private data class RawShopIndex(
 private data class LoadedShop(
     val label: String,
     val npcInternal: String,
+    val variantInternal: String?,
+    val currencyInternal: String,
     val title: String,
     val slug: String,
     val buyMultiplier: Int,
@@ -706,6 +863,7 @@ private data class ShopSpec(
     val slug: String,
     val inheritedNpc: LookupEntry,
     val rawShopInternal: String,
+    val currency: CurrencyOption,
     val writeNativeScript: Boolean,
     val buyMultiplier: Int,
     val sellMultiplier: Int,
@@ -724,9 +882,12 @@ private data class GeneratedFiles(
     val nativeScript: String?,
     val rawShopInternal: String,
     val rawShopToml: String,
+    val currency: CurrencyOption,
 ) {
     fun preview(): String =
         buildString {
+            appendLine("Currency: ${currency.label} (${currency.internal})")
+            appendLine()
             appendLine("----- Native shop inventory -----")
             appendLine("Updates native shop inventory: $rawShopInternal")
             appendLine(rawShopToml)
@@ -857,6 +1018,7 @@ private fun buildGeneratedFiles(spec: ShopSpec): GeneratedFiles {
         nativeScript = nativeScript,
         rawShopInternal = spec.rawShopInternal,
         rawShopToml = rawShopToml,
+        currency = spec.currency,
     )
 }
 
@@ -901,6 +1063,12 @@ private fun buildShopInventoryToml(
 private fun buildNativeShopScript(spec: ShopSpec, tradeSlot: Int): String {
     val className = nativeShopClassName(spec.scriptMarker)
     val openFunction = "open$className"
+    val currencyArg =
+        if (spec.currency.isStandard) {
+            ""
+        } else {
+            ", currency = ${spec.currency.internal.kotlinString()}"
+        }
     return buildString {
         appendLine("package org.rsmod.content.generic.npcs.shops")
         appendLine()
@@ -918,7 +1086,7 @@ private fun buildNativeShopScript(spec: ShopSpec, tradeSlot: Int): String {
         appendLine("    }")
         appendLine()
         appendLine("    private fun Player.$openFunction(npc: Npc) {")
-        appendLine("        shops.open(this, npc, ${spec.shopTitle.kotlinString()}, ${spec.openInvInternal.kotlinString()})")
+        appendLine("        shops.open(this, npc, ${spec.shopTitle.kotlinString()}, ${spec.openInvInternal.kotlinString()}$currencyArg)")
         appendLine("    }")
         appendLine("}")
     }.trimEnd()
@@ -1029,8 +1197,53 @@ private fun loadRawShopIndex(root: Path): RawShopIndex {
                 .flatMap { file -> inventoryBlocks(Files.readString(file)).asSequence() }
                 .mapNotNull(::parseShopInventoryInfo)
                 .associateBy { it.internal }
-        }
+    }
     return RawShopIndex(shops)
+}
+
+private fun loadCurrencyOptions(root: Path): List<CurrencyOption> {
+    val known =
+        listOf(
+            CurrencyOption.StandardGp,
+            CurrencyOption("currency.tokkul", "Tokkul", "obj.tzhaar_token"),
+            CurrencyOption("currency.trading_sticks", "Trading sticks", "obj.village_trade_sticks"),
+            CurrencyOption("currency.numulite", "Numulite", "obj.fossil_numulite"),
+            CurrencyOption("currency.warrior_guild_token", "Warrior Guild tokens", "obj.warguild_tokens"),
+            CurrencyOption("currency.castle_wars_ticket", "Castle Wars tickets", "obj.castlewars_ticket"),
+            CurrencyOption("currency.mark_of_grace", "Marks of grace", "obj.grace"),
+            CurrencyOption("currency.golden_nugget", "Golden nuggets", "obj.motherlode_nugget"),
+            CurrencyOption("currency.abyssal_pearl", "Abyssal pearls", "obj.abyssal_pearl"),
+            CurrencyOption("currency.molch_pearl", "Molch pearls", "obj.aerial_fishing_pearl"),
+            CurrencyOption("currency.stardust", "Stardust", "obj.star_dust"),
+            CurrencyOption("currency.barronite_shard", "Barronite shards", "obj.camdozaal_barronite_shard"),
+            CurrencyOption("currency.ancient_essence", "Ancient essence", "obj.ancient_essence"),
+            CurrencyOption("currency.termite", "Termites", "obj.varlamore_wyrm_agility_termite"),
+            CurrencyOption("currency.ecto_token", "Ecto-tokens", "obj.ectotoken"),
+            CurrencyOption("currency.agility_arena_ticket", "Agility arena tickets", "obj.agilityarena_ticket"),
+            CurrencyOption("currency.brimhaven_voucher", "Brimhaven vouchers", "obj.agilityarena_voucher"),
+            CurrencyOption("currency.blood_money", "Blood money", "obj.deadman_coins"),
+            CurrencyOption("currency.platinum_token", "Platinum tokens", "obj.platinum"),
+            CurrencyOption("currency.chaos_rune", "Chaos runes", "obj.chaosrune"),
+        )
+    val byInternal = known.associateBy { it.internal }.toMutableMap()
+    val file = root.resolve(CURRENCY_GAMEVALS)
+    if (Files.exists(file)) {
+        Files.readAllLines(file)
+            .asSequence()
+            .map { line -> line.substringBefore('#').trim() }
+            .mapNotNull { line -> line.substringBefore('=', "").trim().takeIf { it.isNotBlank() } }
+            .map { key -> "currency.$key" }
+            .forEach { internal ->
+                byInternal.putIfAbsent(
+                    internal,
+                    CurrencyOption(internal = internal, label = internal.removePrefix("currency.").humanizedName()),
+                )
+            }
+    }
+    return byInternal.values.sortedWith(
+        compareBy<CurrencyOption> { !it.isStandard }
+            .thenBy { it.label.lowercase() },
+    )
 }
 
 private fun inventoryBlocks(text: String): List<String> {
@@ -1068,14 +1281,16 @@ private fun rawInventoryStockRows(block: String): List<RawStockEntry> {
 private fun loadScriptedNpcIndex(root: Path, rawShopIndex: RawShopIndex): ScriptedNpcIndex {
     val contentDir = root.resolve("content")
     if (!Files.isDirectory(contentDir)) {
-        return ScriptedNpcIndex(emptyMap(), emptyList())
+        return ScriptedNpcIndex(emptyMap(), emptyMap(), emptyList())
     }
-    val links = mutableMapOf<String, ShopInventoryInfo>()
+    val links = mutableMapOf<String, MutableList<ShopInventoryInfo>>()
+    val currencies = mutableMapOf<String, String>()
     val opPatterns = mutableListOf<NpcOpPattern>()
     val npcPattern = Regex("""onOpNpc(\d)\s*\(\s*"([^"]+)"""")
     val shopOpenPattern =
         Regex("""shops\.open\s*\((?s:.*?)"[^"]+"\s*,\s*"(inv\.[^"]+)"""")
     val invLiteralPattern = Regex(""""(inv\.[^"]+)"""")
+    val currencyPattern = Regex("""currency\s*=\s*"([^"]+)"""")
     Files.walk(contentDir).use { paths ->
         paths.iterator().asSequence()
             .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".kt") }
@@ -1100,12 +1315,28 @@ private fun loadScriptedNpcIndex(root: Path, rawShopIndex: RawShopIndex): Script
                         invLiteralPattern.findAll(text).map { it.groupValues[1] }.toSet()
                     }
                 if (npcs.isNotEmpty() && shopInvs.isNotEmpty()) {
-                    val shop = chooseScriptedShop(shopInvs.mapNotNull(rawShopIndex::byInternal)) ?: return@forEach
-                    npcs.forEach { npc -> links.putIfAbsent(npc, shop) }
+                    val shops = shopInvs.mapNotNull(rawShopIndex::byInternal).distinctBy { it.internal }
+                    if (shops.isEmpty()) {
+                        return@forEach
+                    }
+                    val currency = currencyPattern.find(text)?.groupValues?.get(1) ?: CurrencyOption.StandardGp.internal
+                    npcs.forEach { npc ->
+                        val linked = links.getOrPut(npc) { mutableListOf() }
+                        shops.forEach { shop ->
+                            if (linked.none { it.internal == shop.internal }) {
+                                linked += shop
+                            }
+                        }
+                        currencies.putIfAbsent(npc, currency)
+                    }
                 }
             }
     }
-    return ScriptedNpcIndex(links, opPatterns)
+    return ScriptedNpcIndex(
+        shopLinks = links.mapValues { (_, shops) -> shops.distinctBy { it.internal } },
+        currencies = currencies,
+        opPatterns = opPatterns,
+    )
 }
 
 private fun chooseScriptedShop(shops: List<ShopInventoryInfo>): ShopInventoryInfo? {
@@ -1172,15 +1403,31 @@ private fun NpcServerType.toLookupEntry(
             .firstOrNull()
     val paramShopInventoryId = paramsRaw?.get(shopParams.inventory).asParamInt()
     val paramShopInventoryInternal = paramShopInventoryId?.let { safeReverseMapping(RSCMType.INV, it) }
-    val scriptedShop = scriptedNpcIndex.shopLinks[internal]
+    val scriptedShops = scriptedNpcIndex.shopsFor(internal)
+    val scriptedShop = chooseScriptedShop(scriptedShops)
+    val shopCurrency = scriptedNpcIndex.currencyFor(internal)
     val hasNativeTradeScript = tradeSlot?.let { scriptedNpcIndex.hasOp(internal, it) } == true
+    val paramShop = rawShopIndex.byInternal(paramShopInventoryInternal)
+    val matchedShop = rawShopIndex.matchNpc(name, internal, regions)
+    val shopVariants =
+        buildList {
+                if (paramShop != null) {
+                    add(paramShop)
+                }
+                addAll(scriptedShops)
+                if (paramShop == null && scriptedShops.isEmpty() && matchedShop != null) {
+                    add(matchedShop)
+                }
+            }
+            .distinctBy { it.internal }
     val linkedShop =
-        rawShopIndex.byInternal(paramShopInventoryInternal)
+        paramShop
+            ?: chooseScriptedShop(shopVariants)
             ?: scriptedShop
-            ?: rawShopIndex.matchNpc(name, internal, regions)
+            ?: matchedShop
     val shopInventoryId =
         paramShopInventoryId ?: linkedShop?.internal?.let { runCatching { RSCM.getRSCM(it) }.getOrNull() }
-    val hasShopInventory = paramShopInventoryId != null || linkedShop != null
+    val hasShopInventory = paramShopInventoryId != null || shopVariants.isNotEmpty() || linkedShop != null
     return LookupEntry(
         id = id,
         internal = internal,
@@ -1197,6 +1444,8 @@ private fun NpcServerType.toLookupEntry(
         shopSellMultiplier = paramsRaw?.get(shopParams.sellPercentage).asParamInt() ?: linkedShop?.sellMultiplier,
         shopChangeDelta = paramsRaw?.get(shopParams.changePercentage).asParamInt() ?: linkedShop?.changeDelta,
         shopStock = linkedShop?.stock.orEmpty(),
+        shopVariants = shopVariants,
+        shopCurrencyInternal = shopCurrency,
         scriptedShopInternal = scriptedShop?.internal,
         hasNativeTradeScript = hasNativeTradeScript,
     )
@@ -1258,6 +1507,7 @@ private const val RAW_SHOPS_DIR = ".data/raw-cache/server/shops"
 private const val NATIVE_SHOP_SCRIPT_DIR =
     "content/generic/generic-npcs/src/main/kotlin/org/rsmod/content/generic/npcs/shops/generated"
 private const val PARAM_GAMEVALS = ".data/gamevals/param.rscm"
+private const val CURRENCY_GAMEVALS = ".data/gamevals/currency.rscm"
 private const val MAP_NPC_SPAWNS_DIR = ".data/raw-cache/map/npcs"
 private const val ALL_REGIONS = "All regions"
 private const val SHOP_INVENTORY_PARAM_ID = 65525
@@ -1305,6 +1555,16 @@ private fun String.toSlug(): String {
         else -> slug
     }
 }
+
+private fun String.humanizedName(): String =
+    replace('_', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { word ->
+            word.replaceFirstChar { char ->
+                if (char.isLowerCase()) char.titlecase() else char.toString()
+            }
+        }
 
 private fun String.tomlString(): String =
     "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""

@@ -12,26 +12,32 @@ hand. It is designed as a drop-in Gradle module for an OpenRune server checkout.
 - Recreate existing in-world shops without moving the NPC.
 - Repair missing existing-shop Trade scripts with normal Aubury-style OpenRune code.
 - Load the stock from a selected existing shop NPC.
+- Edit native shop variants on one NPC, such as base, skillcape, or trimmed skillcape stock.
+- Includes a disabled custom-currency selector for future item currencies, such as Tokkul,
+  trading sticks, marks of grace, pearls, or stardust.
 
 ## Install
 
 Copy these files into the root of an OpenRune server project:
 
 - `tools/shop-maker`
-- `tools/shop-manager-intellij`
 - `shop-manager.bat`
 
 Then add the module to `settings.gradle.kts`:
 
 ```kotlin
-include(
-    "tools:shop-maker",
-    "tools:shop-manager-intellij",
-)
+include("tools:shop-maker")
 ```
 
-If your `settings.gradle.kts` already has an `include(...)` block, add only the two `tools:*`
-entries inside the existing list.
+The IntelliJ plugin is optional. To install its source too, copy:
+
+- `tools/shop-manager-intellij`
+
+Then add:
+
+```kotlin
+include("tools:shop-manager-intellij")
+```
 
 Optionally add a root Gradle shortcut to `build.gradle.kts`:
 
@@ -47,14 +53,22 @@ tasks.register("shopManager") {
 
 From the OpenRune server root:
 
-```powershell
+Windows:
+
+```text
 .\gradlew.bat --no-daemon :tools:shop-maker:run
 ```
 
 Or double-click:
 
-```powershell
+```text
 shop-manager.bat
+```
+
+Linux/macOS:
+
+```text
+./gradlew --no-daemon :tools:shop-maker:run
 ```
 
 ## IntelliJ Plugin
@@ -64,7 +78,7 @@ The IntelliJ plugin embeds the same Shop Manager UI as a right-side tool window 
 
 Build it from the OpenRune server root after copying the files and adding the Gradle include:
 
-```powershell
+```text
 .\gradlew.bat --no-daemon :tools:shop-manager-intellij:buildPlugin
 ```
 
@@ -88,10 +102,15 @@ NPC and does not create new NPC definitions.
 Basic flow:
 
 - Pick an NPC and press **Load selected shop** to pull its current stock into the form.
+- If the NPC has more than one native shop inventory, choose the stock set from **Shop variant**.
+- **Currency** is currently greyed out and forced to coins until the server-side custom currency
+  handlers are confirmed.
 - Search items and add/remove stock rows.
 - Press **Preview** if you want to inspect the generated changes.
 - Press **Save / Fix shop** to write the native shop update.
 - Rebuild cache with `:or-cache:buildCache`, then restart the server.
+
+If an NPC already has a hand-written Trade script, the tool will not create a second Trade handler.
 
 ## Output Files
 
@@ -110,8 +129,20 @@ If that generated script is needed, the tool may also add the normal shops API d
 The tool does not write generated inventory/NPC definition files and does not install a custom
 shop runtime handler.
 
+Custom item currencies require matching server support for the chosen `currency.*` key before the
+selector can be enabled. Point-based currencies, such as activity reward points that are not
+inventory items, need separate server logic.
+
 After pressing **Save / Fix shop**, rebuild the cache and restart the server:
 
-```powershell
+Windows:
+
+```text
 .\gradlew.bat --no-daemon :or-cache:buildCache
+```
+
+Linux/macOS:
+
+```text
+./gradlew --no-daemon :or-cache:buildCache
 ```
