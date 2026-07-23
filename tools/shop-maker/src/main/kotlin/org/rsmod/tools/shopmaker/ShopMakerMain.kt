@@ -4,6 +4,8 @@ import dev.openrune.ServerCacheManager
 import dev.openrune.gamevals.GameValProvider
 import dev.openrune.rscm.RSCM
 import dev.openrune.rscm.RSCMType
+import dev.openrune.types.InvScope
+import dev.openrune.types.InventoryServerType
 import dev.openrune.types.ItemServerType
 import dev.openrune.types.NpcServerType
 import java.awt.BorderLayout
@@ -38,7 +40,9 @@ import javax.swing.UIManager
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 import javax.swing.table.AbstractTableModel
+import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 fun main() {
     SwingUtilities.invokeLater {
@@ -76,8 +80,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private val shopSlug = JTextField()
     private val shopVariant = JComboBox<ShopInventoryInfo>()
     private val shopCurrency = JComboBox<CurrencyOption>()
-    private val buyMultiplier = JSpinner(SpinnerNumberModel(600, 0, 10_000, 10))
-    private val sellMultiplier = JSpinner(SpinnerNumberModel(1000, 0, 10_000, 10))
+    private val buyMultiplier = JSpinner(SpinnerNumberModel(600, 0, PRICE_MULTIPLIER_MAX, 10))
+    private val sellMultiplier = JSpinner(SpinnerNumberModel(1000, 0, PRICE_MULTIPLIER_MAX, 10))
     private val changeDelta = JSpinner(SpinnerNumberModel(20, 0, 10_000, 1))
     private val loadSelectedShopButton = JButton("Load selected shop")
     private val saveShopButton = JButton("Save shop")
@@ -94,6 +98,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
 
     private var lookup = LookupData(emptyList(), emptyList(), emptyList(), listOf(CurrencyOption.StandardGp))
     private var updatingShopVariant = false
+    private var activeNpcInternal: String? = null
+    private var activeShopVariantInternal: String? = null
 
     init {
         minimumSize = Dimension(1180, 760)
@@ -120,13 +126,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             }
         }
         shopVariant.isEnabled = false
-        shopCurrency.isEnabled = CUSTOM_CURRENCY_SELECTION_ENABLED
-        shopCurrency.toolTipText =
-            if (CUSTOM_CURRENCY_SELECTION_ENABLED) {
-                "Select the item currency this shop should use."
-            } else {
-                "Custom currency selection is disabled until server currency handlers are confirmed."
-            }
+        shopCurrency.toolTipText = "Select the native OpenRune currency this shop should use."
 
         loadCache()
         refreshModeUi()
@@ -197,6 +197,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
 
         val removeStock = JButton("Remove stock row")
         removeStock.addActionListener { removeSelectedStockRow() }
+        val setPrice = JButton("Set price")
+        setPrice.addActionListener { setSelectedStockPrice() }
         val makePreview = JButton("Preview")
         makePreview.addActionListener { previewShop() }
         saveShopButton.addActionListener { placeShop() }
@@ -205,8 +207,9 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         val loadActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
         loadActions.add(loadSelectedShopButton)
 
-        val editActions = JPanel(GridLayout(1, 3, 8, 0))
+        val editActions = JPanel(GridLayout(1, 4, 8, 0))
         editActions.add(saveShopButton)
+        editActions.add(setPrice)
         editActions.add(makePreview)
         editActions.add(removeStock)
         actions.add(loadActions)
@@ -234,7 +237,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
 
     private fun refreshModeUi() {
         saveShopButton.text = "Save / Fix shop"
-        npcHint.text = "Shows in-world Trade NPCs with native shop data."
+        npcHint.text = "Shows in-world Trade NPCs with real cache shop inventories. Empty native shops can be filled."
     }
 
     private fun loadCache() {
@@ -247,7 +250,9 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 val shopParams = ShopParamIds.load(repoRoot)
                 val rawShopIndex = loadRawShopIndex(repoRoot)
                 val scriptedNpcIndex = loadScriptedNpcIndex(repoRoot, rawShopIndex)
-                val currencies = loadCurrencyOptions(repoRoot)
+                val items = ServerCacheManager.getItems().values.mapNotNull { it.toLookupEntry() }
+                    .sortedWith(compareBy<LookupEntry> { it.name }.thenBy { it.id })
+                val currencies = loadCurrencyOptions(repoRoot, items)
                 val regions = spawnedNpcRegions.values.flatten().distinct().sorted()
                 return LookupData(
                     npcs = ServerCacheManager.getNpcs().values
@@ -255,13 +260,13 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                             it.toLookupEntry(spawnedNpcRegions, shopParams, rawShopIndex, scriptedNpcIndex)
                         }
                         .sortedWith(
-                            compareBy<LookupEntry> { !it.isExistingShopNpc }
+                            compareBy<LookupEntry> { !it.isEditableShopNpc }
+                                .thenBy { !it.hasShopInventory }
                                 .thenBy { !it.canOpenShop }
                                 .thenBy { it.name }
                                 .thenBy { it.id },
                         ),
-                    items = ServerCacheManager.getItems().values.mapNotNull { it.toLookupEntry() }
-                        .sortedWith(compareBy<LookupEntry> { it.name }.thenBy { it.id }),
+                    items = items,
                     regions = regions,
                     currencies = currencies,
                 )
@@ -294,15 +299,25 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private fun refreshNpcList() {
         val query = npcSearch.text.normalizedQuery()
         val selectedRegion = npcRegion.selectedItem as? String ?: ALL_REGIONS
+        val selectedInternal = npcList.selectedValue?.internal ?: activeNpcInternal
         val filtered =
             lookup.npcs.asSequence()
                 .filter { selectedRegion == ALL_REGIONS || selectedRegion in it.regions }
-                .filter { it.isExistingShopNpc }
+                .filter { it.isEditableShopNpc }
                 .filter { it.matches(query) }
                 .take(MAX_SEARCH_RESULTS)
-                .toList()
+                .toMutableList()
+        val selected =
+            selectedInternal
+                ?.let { internal -> lookup.npcs.firstOrNull { it.internal == internal && it.isEditableShopNpc } }
+        if (selected != null && filtered.none { it.internal == selected.internal }) {
+            filtered.add(0, selected)
+        }
         npcList.setListData(filtered.toTypedArray())
-        if (npcList.selectedValue !in filtered) {
+        val nextSelection = selectedInternal?.let { internal -> filtered.firstOrNull { it.internal == internal } }
+        if (nextSelection != null) {
+            npcList.setSelectedValue(nextSelection, true)
+        } else if (npcList.selectedValue !in filtered) {
             npcList.clearSelection()
         }
     }
@@ -345,12 +360,55 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         status.text = "Removed stock item."
     }
 
+    private fun setSelectedStockPrice() {
+        val table = findStockTable(this) ?: return
+        val viewRow = table.selectedRow
+        if (viewRow < 0) {
+            JOptionPane.showMessageDialog(this, "Pick a stock row first.")
+            return
+        }
+        val row = table.convertRowIndexToModel(viewRow)
+        val stock = stockModel.rows.getOrNull(row) ?: return
+        val baseCost = stock.item.cost
+        if (baseCost <= 0) {
+            JOptionPane.showMessageDialog(
+                this,
+                "${stock.item.name} has no cache value, so a multiplier price cannot be calculated.",
+            )
+            return
+        }
+        val currentMultiplier = sellMultiplier.value as Int
+        val currentPrice = initialShopPrice(baseCost, currentMultiplier)
+        val currency = shopCurrency.selectedItem as? CurrencyOption ?: CurrencyOption.StandardGp
+        val input =
+            JOptionPane.showInputDialog(
+                this,
+                "Target price for ${stock.item.name} in ${currency.label}:",
+                currentPrice.toString(),
+            ) ?: return
+        val targetPrice = input.replace(",", "").trim().toIntOrNull()
+        if (targetPrice == null || targetPrice < 0) {
+            JOptionPane.showMessageDialog(this, "Price must be a whole number.")
+            return
+        }
+        val multiplier = multiplierForTargetPrice(baseCost, targetPrice)
+        sellMultiplier.value = multiplier
+        val actualPrice = initialShopPrice(baseCost, multiplier)
+        status.text =
+            if (actualPrice == targetPrice) {
+                "Set ${stock.item.name} to cost $actualPrice ${currency.label} at normal stock."
+            } else {
+                "Closest native multiplier makes ${stock.item.name} cost $actualPrice ${currency.label} at normal stock."
+            }
+    }
+
     private fun loadSelectedNpcShop() {
         try {
-            val selectedNpc = npcList.selectedValue ?: error("Pick a shop NPC first.")
+            val selectedNpc = selectedNpcOrActive() ?: error("Pick a shop NPC first.")
+            activeNpcInternal = selectedNpc.internal
             val variants = selectedNpc.shopVariants
             if (variants.isNotEmpty()) {
-                populateShopVariants(selectedNpc)
+                populateShopVariants(selectedNpc, activeShopVariantInternal)
                 val variant = (shopVariant.selectedItem as? ShopInventoryInfo) ?: variants.first()
                 loadShopVariant(selectedNpc, variant)
                 return
@@ -366,7 +424,11 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                         )
                     }
                 } else {
-                    val inventoryId = selectedNpc.shopInventoryId ?: error("That NPC does not have shop stock attached.")
+                    val inventoryId = selectedNpc.shopInventoryId
+                        ?: error(
+                            "${selectedNpc.name} does not have a real cache shop inventory. " +
+                                "Pick an NPC with a matched inv.* shop before saving stock.",
+                        )
                     val inventory = ServerCacheManager.getInventory(inventoryId)
                         ?: error("Could not find the shop inventory for ${selectedNpc.name}.")
                     inventory.stock.map { stock ->
@@ -377,8 +439,6 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                         )
                     }
                 }
-            require(stock.isNotEmpty()) { "That shop has no stock rows to load." }
-
             val slug = selectedNpc.shopInventoryInternal
                 ?.removePrefix("inv.")
                 ?.takeIf { it.isNotBlank() }
@@ -404,7 +464,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
 
     private fun loadSelectedShopVariant() {
         try {
-            val selectedNpc = npcList.selectedValue ?: return
+            val selectedNpc = selectedNpcOrActive() ?: return
             val variant = shopVariant.selectedItem as? ShopInventoryInfo ?: return
             loadShopVariant(selectedNpc, variant)
         } catch (e: Exception) {
@@ -413,6 +473,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     }
 
     private fun loadShopVariant(selectedNpc: LookupEntry, variant: ShopInventoryInfo) {
+        activeNpcInternal = selectedNpc.internal
+        activeShopVariantInternal = variant.internal
         val stock =
             variant.stock.map { stock ->
                 StockEntry(
@@ -421,8 +483,6 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                     restockCycles = stock.restockCycles,
                 )
             }
-        require(stock.isNotEmpty()) { "That shop has no stock rows to load." }
-
         applyLoadedShop(
             LoadedShop(
                 label = selectedNpc.name,
@@ -458,14 +518,11 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     }
 
     private fun applyLoadedShop(shop: LoadedShop) {
+        activeNpcInternal = shop.npcInternal
+        activeShopVariantInternal = shop.variantInternal
         shopSlug.text = shop.slug
         shopName.text = shop.title
-        shopCurrency.selectedItem =
-            if (CUSTOM_CURRENCY_SELECTION_ENABLED) {
-                lookup.currencyByInternal(shop.currencyInternal)
-            } else {
-                CurrencyOption.StandardGp
-            }
+        shopCurrency.selectedItem = lookup.currencyByInternal(shop.currencyInternal)
         buyMultiplier.value = shop.buyMultiplier
         sellMultiplier.value = shop.sellMultiplier
         changeDelta.value = shop.changeDelta
@@ -498,6 +555,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             val spec = readSpec()
             val generated = buildGeneratedFiles(spec)
             generated.write(repoRoot)
+            applySavedShopToLookup(spec)
             preview.text = generated.preview()
             status.text = "Saved ${spec.shopTitle}. Rebuild cache and restart server before testing."
             JOptionPane.showMessageDialog(
@@ -510,25 +568,26 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     }
 
     private fun readSpec(): ShopSpec {
-        val selectedNpc = npcList.selectedValue
+        val selectedNpc = selectedNpcOrActive()
             ?: error("Pick a shop NPC first.")
         require(selectedNpc.canOpenShop) { "Pick an NPC that can open a shop." }
-        require(selectedNpc.isExistingShopNpc) {
-            "Only in-world NPCs with native shop data can be edited."
+        require(selectedNpc.isEditableShopNpc) {
+            "Only in-world Trade NPCs can be edited."
         }
         val selectedVariant =
             (shopVariant.selectedItem as? ShopInventoryInfo)
                 ?.takeIf { variant -> selectedNpc.shopVariants.any { it.internal == variant.internal } }
-        val rawShopInternal = selectedVariant?.internal ?: selectedNpc.shopInventoryInternal ?: selectedNpc.scriptedShopInternal
-            ?: error("Could not identify the native shop inventory for ${selectedNpc.name}.")
-        val selectedCurrency =
-            if (CUSTOM_CURRENCY_SELECTION_ENABLED) {
-                shopCurrency.selectedItem as? CurrencyOption ?: CurrencyOption.StandardGp
-            } else {
-                CurrencyOption.StandardGp
-            }
+        val selectedCurrency = shopCurrency.selectedItem as? CurrencyOption ?: CurrencyOption.StandardGp
         val slug = shopSlug.text.toSlug()
         require(slug.isNotBlank()) { "Shop slug cannot be empty." }
+        val rawShopInternal =
+            selectedVariant?.internal
+                ?: selectedNpc.shopInventoryInternal
+                ?: selectedNpc.scriptedShopInternal
+                ?: error(
+                    "${selectedNpc.name} does not have a real cache shop inventory. " +
+                        "Custom invented inv.* ids open blank in the client.",
+                )
         require(stockModel.rows.isNotEmpty()) { "Add at least one stock item." }
         require(stockModel.rows.size <= MAX_RENDER_STOCK_ROWS) {
             "Generated shops currently support up to $MAX_RENDER_STOCK_ROWS stock rows. " +
@@ -540,10 +599,13 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         val writesNativeScript =
             generatedScriptExists ||
                 (selectedNpc.scriptedShopInternal == null && !selectedNpc.hasNativeTradeScript)
-        require(selectedCurrency.isStandard || writesNativeScript) {
+        val existingScriptAlreadyUsesCurrency =
+            selectedNpc.hasNativeTradeScript && selectedNpc.shopCurrencyInternal == selectedCurrency.internal
+        require(writesNativeScript || !selectedNpc.hasNativeTradeScript || existingScriptAlreadyUsesCurrency) {
             "${selectedNpc.name} already uses a hand-written native Trade script. " +
                 "The tool will not create a duplicate click handler. Add " +
-                "currency = ${selectedCurrency.internal.kotlinString()} to that script's shops.open call."
+                "currency = ${selectedCurrency.internal.kotlinString()} to that script's shops.open call, " +
+                "or choose the currency already used by that script."
         }
 
         return ShopSpec(
@@ -553,11 +615,69 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
             rawShopInternal = rawShopInternal,
             currency = selectedCurrency,
             writeNativeScript = writesNativeScript,
+            serverOnlyInventory = true,
             buyMultiplier = buyMultiplier.value as Int,
             sellMultiplier = sellMultiplier.value as Int,
             changeDelta = changeDelta.value as Int,
             stock = stockModel.rows.toList(),
         )
+    }
+
+    private fun selectedNpcOrActive(): LookupEntry? =
+        npcList.selectedValue
+            ?: activeNpcInternal?.let { internal -> lookup.npcs.firstOrNull { it.internal == internal } }
+
+    private fun applySavedShopToLookup(spec: ShopSpec) {
+        val savedStock =
+            spec.stock.map { stock ->
+                RawStockEntry(
+                    itemInternal = stock.item.internal,
+                    count = stock.count,
+                    restockCycles = stock.restockCycles,
+                )
+            }
+        val savedShop =
+            ShopInventoryInfo(
+                internal = spec.rawShopInternal,
+                title = spec.shopTitle,
+                buyMultiplier = spec.buyMultiplier,
+                sellMultiplier = spec.sellMultiplier,
+                changeDelta = spec.changeDelta,
+                stock = savedStock,
+            )
+        lookup =
+            lookup.copy(
+                npcs =
+                    lookup.npcs.map { npc ->
+                        if (npc.internal != spec.npcInternal) {
+                            npc
+                        } else {
+                            val variants =
+                                (npc.shopVariants.filterNot { it.internal == savedShop.internal } + savedShop)
+                                    .distinctBy { it.internal }
+                            npc.copy(
+                                hasShopInventory = true,
+                                shopInventoryInternal = spec.rawShopInternal,
+                                shopTitle = spec.shopTitle,
+                                shopBuyMultiplier = spec.buyMultiplier,
+                                shopSellMultiplier = spec.sellMultiplier,
+                                shopChangeDelta = spec.changeDelta,
+                                shopStock = savedStock,
+                                shopVariants = variants,
+                                shopCurrencyInternal = spec.currency.internal,
+                                scriptedShopInternal = npc.scriptedShopInternal ?: spec.rawShopInternal,
+                                hasNativeTradeScript = npc.hasNativeTradeScript || spec.writeNativeScript,
+                            )
+                        }
+                    },
+            )
+        activeNpcInternal = spec.npcInternal
+        activeShopVariantInternal = spec.rawShopInternal
+        refreshNpcList()
+        selectedNpcOrActive()?.let { selectedNpc ->
+            npcList.setSelectedValue(selectedNpc, true)
+            populateShopVariants(selectedNpc, spec.rawShopInternal)
+        }
     }
 
     private fun showError(message: String, e: Exception) {
@@ -572,7 +692,6 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         private const val DEFAULT_SELL_MULTIPLIER = 1000
         private const val DEFAULT_CHANGE_DELTA = 20
         private const val MAX_RENDER_STOCK_ROWS = 28
-        private const val CUSTOM_CURRENCY_SELECTION_ENABLED = false
     }
 }
 
@@ -614,14 +733,46 @@ private data class CurrencyOption(
     val internal: String,
     val label: String,
     val objInternal: String? = null,
+    val varbitInternal: String? = null,
+    val singularName: String = label,
+    val pluralName: String = label,
+    val registered: Boolean = true,
 ) {
     val isStandard: Boolean get() = internal == StandardGp.internal
+    val key: String get() = internal.removePrefix("currency.")
+    val dbrowKey: String get() = "shop_currency_$key"
+    val dbrowInternal: String get() = "dbrow.$dbrowKey"
+    val needsRegistration: Boolean get() = !registered
 
-    override fun toString(): String = label
+    init {
+        require(objInternal != null || varbitInternal != null) {
+            "Currency $internal must define an item or varbit backing."
+        }
+    }
+
+    override fun toString(): String =
+        if (needsRegistration) "$label (will register)" else label
 
     companion object {
-        val StandardGp = CurrencyOption("currency.standard_gp", "Coins (standard GP)", "obj.coins")
+        val StandardGp =
+            CurrencyOption(
+                internal = "currency.standard_gp",
+                label = "Coins (standard GP)",
+                objInternal = "obj.coins",
+                singularName = "coin",
+                pluralName = "coins",
+            )
     }
+}
+
+private data class KnownCurrencySeed(
+    val key: String,
+    val label: String,
+    val singularName: String,
+    val pluralName: String,
+    val objCandidates: List<String>,
+) {
+    val internal: String get() = "currency.$key"
 }
 
 private data class LookupEntry(
@@ -651,6 +802,9 @@ private data class LookupEntry(
 
     val isExistingShopNpc: Boolean
         get() = canOpenShop && hasShopInventory && isSpawned
+
+    val isEditableShopNpc: Boolean
+        get() = isSpawned && hasShopInventory && canOpenShop
 
     val tradeOpSlot: Int?
         get() =
@@ -690,6 +844,12 @@ private data class LookupEntry(
         }
         return label.lowercase().contains(query)
     }
+
+    fun defaultNewShopSlug(): String =
+        when {
+            name.isNotBlank() -> "${name.toSlug()}_shop"
+            else -> "${internal.removePrefix("npc.").toSlug()}_shop"
+        }
 
     override fun toString(): String = label
 }
@@ -761,8 +921,15 @@ private data class RawShopIndex(
         internal?.let { byInternal[it] }
 
     fun matchNpc(name: String, internal: String, regions: Set<String>): ShopInventoryInfo? {
+        val npcKey = internal.removePrefix("npc.")
         val candidates =
-            sequenceOf(name, internal.removePrefix("npc.").replace('_', ' '))
+            sequenceOf(
+                name,
+                npcKey.replace('_', ' '),
+                npcKey.replace("merchant", "shop").replace('_', ' '),
+                npcKey.replace("merchant_", "shop_").replace('_', ' '),
+                npcKey.replace("_merchant", "_shop").replace('_', ' '),
+            )
                 .map(::shopSearchKey)
                 .filter { it.length >= 3 && it !in GENERIC_SHOP_MATCH_KEYS }
                 .flatMap { key -> sequenceOf(key, "${key}s") }
@@ -845,6 +1012,7 @@ private data class ShopSpec(
     val rawShopInternal: String,
     val currency: CurrencyOption,
     val writeNativeScript: Boolean,
+    val serverOnlyInventory: Boolean,
     val buyMultiplier: Int,
     val sellMultiplier: Int,
     val changeDelta: Int,
@@ -867,6 +1035,9 @@ private data class GeneratedFiles(
     fun preview(): String =
         buildString {
             appendLine("Currency: ${currency.label} (${currency.internal})")
+            if (currency.needsRegistration) {
+                appendLine("Registers native OpenRune currency row: ${currency.dbrowInternal}")
+            }
             appendLine()
             appendLine("----- Native shop inventory -----")
             appendLine("Updates native shop inventory: $rawShopInternal")
@@ -889,6 +1060,9 @@ private data class GeneratedFiles(
         }
 
     fun write(root: Path) {
+        if (currency.needsRegistration) {
+            registerCurrency(root, currency)
+        }
         writeRawShop(root, rawShopInternal, rawShopToml)
         if (nativeScriptPath != null && nativeScript != null) {
             writeNativeShopScript(root.resolve(nativeScriptPath), nativeScript)
@@ -980,6 +1154,7 @@ private fun buildGeneratedFiles(spec: ShopSpec): GeneratedFiles {
     val rawShopToml = buildShopInventoryToml(
         invInternal = spec.rawShopInternal,
         title = spec.shopTitle,
+        serverOnly = spec.serverOnlyInventory,
         buyMultiplier = spec.buyMultiplier,
         sellMultiplier = spec.sellMultiplier,
         changeDelta = spec.changeDelta,
@@ -1005,6 +1180,7 @@ private fun buildGeneratedFiles(spec: ShopSpec): GeneratedFiles {
 private fun buildShopInventoryToml(
     invInternal: String,
     title: String,
+    serverOnly: Boolean,
     buyMultiplier: Int,
     sellMultiplier: Int,
     changeDelta: Int,
@@ -1012,7 +1188,7 @@ private fun buildShopInventoryToml(
 ): String =
     buildString {
         appendLine("[[inventory]]")
-        appendLine("isServerOnly = true")
+        appendLine("isServerOnly = $serverOnly")
         appendLine("id = ${invInternal.tomlString()}")
         appendLine("name = ${title.tomlString()}")
         appendLine()
@@ -1043,12 +1219,6 @@ private fun buildShopInventoryToml(
 private fun buildNativeShopScript(spec: ShopSpec, tradeSlot: Int): String {
     val className = nativeShopClassName(spec.scriptMarker)
     val openFunction = "open$className"
-    val currencyArg =
-        if (spec.currency.isStandard) {
-            ""
-        } else {
-            ", currency = ${spec.currency.internal.kotlinString()}"
-        }
     return buildString {
         appendLine("package org.rsmod.content.generic.npcs.shops")
         appendLine()
@@ -1066,10 +1236,38 @@ private fun buildNativeShopScript(spec: ShopSpec, tradeSlot: Int): String {
         appendLine("    }")
         appendLine()
         appendLine("    private fun Player.$openFunction(npc: Npc) {")
-        appendLine("        shops.open(this, npc, ${spec.shopTitle.kotlinString()}, ${spec.openInvInternal.kotlinString()}$currencyArg)")
+        appendLine("        shops.open(")
+        appendLine("            player = this,")
+        appendLine("            title = ${spec.shopTitle.kotlinString()},")
+        appendLine("            shopInv = ${spec.openInvInternal.kotlinString()},")
+        appendLine("            buyPercentage = ${spec.buyMultiplier / 10.0},")
+        appendLine("            sellPercentage = ${spec.sellMultiplier / 10.0},")
+        appendLine("            changePercentage = ${spec.changeDelta / 10.0},")
+        appendLine("            currency = ${spec.currency.internal.kotlinString()},")
+        appendLine("        )")
         appendLine("    }")
         appendLine("}")
     }.trimEnd()
+}
+
+private fun initialShopPrice(baseCost: Int, sellMultiplier: Int): Int {
+    val sellPercentage = sellMultiplier / 10.0
+    val basePriceWithMarkup = floor(baseCost * (sellPercentage / 100.0))
+    return max(1.0, max(basePriceWithMarkup, baseCost * 0.3)).toInt()
+}
+
+private fun multiplierForTargetPrice(baseCost: Int, targetPrice: Int): Int {
+    if (targetPrice <= 0) {
+        return 0
+    }
+    var multiplier = ((targetPrice * 1000.0) / baseCost).roundToInt().coerceIn(0, PRICE_MULTIPLIER_MAX)
+    while (multiplier < PRICE_MULTIPLIER_MAX && initialShopPrice(baseCost, multiplier) < targetPrice) {
+        multiplier++
+    }
+    while (multiplier > 0 && initialShopPrice(baseCost, multiplier - 1) >= targetPrice) {
+        multiplier--
+    }
+    return multiplier
 }
 
 private fun nativeShopScriptPath(marker: String): String =
@@ -1099,8 +1297,7 @@ private fun writeNativeShopScript(file: Path, script: String) {
 }
 
 private fun writeRawShop(root: Path, invInternal: String, block: String) {
-    val file = findRawShopFile(root, invInternal)
-        ?: error("Could not find the raw shop file for $invInternal.")
+    val file = findRawShopFile(root, invInternal) ?: createRawShopFile(root, invInternal)
     val text = Files.readString(file)
     val inventoryPattern = Regex("""(?s)\[\[inventory]](.*?)(?=\R\[\[inventory]]|\z)""")
     var replaced = false
@@ -1114,8 +1311,119 @@ private fun writeRawShop(root: Path, invInternal: String, block: String) {
                 current
             }
         }
-    require(replaced) { "Could not replace the raw shop block for $invInternal." }
-    Files.writeString(file, next.trimEnd() + "\n")
+    if (replaced) {
+        Files.writeString(file, next.trimEnd() + "\n")
+    } else {
+        val prefix = if (text.isBlank()) "" else text.trimEnd() + "\n\n"
+        Files.writeString(file, prefix + block.trimEnd() + "\n")
+    }
+}
+
+private fun createRawShopFile(root: Path, invInternal: String): Path {
+    val dir = root.resolve(RAW_SHOPS_DIR)
+    Files.createDirectories(dir)
+    val slug = invInternal.removePrefix("inv.").toSlug()
+    require(isRealCacheShopInventory(root, invInternal)) {
+        "$invInternal is not a real cache shop inventory. Pick an existing inv.* shop inventory; " +
+            "invented shop inventories open blank in the client."
+    }
+    val file = dir.resolve("$slug.toml")
+    require(!Files.exists(file)) {
+        "Could not find the raw shop file for $invInternal, and $file already exists."
+    }
+    Files.writeString(file, "")
+    return file
+}
+
+private fun registerCurrency(root: Path, currency: CurrencyOption) {
+    val tableFile = root.resolve(SHOP_CURRENCY_TABLE_FILE)
+    require(Files.exists(tableFile)) {
+        "Could not find OpenRune's native shop currency table."
+    }
+    validateShopCurrencyTableTarget(tableFile, currency)
+    ensureGameval(root, CURRENCY_GAMEVALS, RSCMType.CURRENCY, currency.key)
+    ensureGameval(root, DBROW_GAMEVALS, RSCMType.DBROW, currency.dbrowKey)
+    ensureShopCurrencyTableRow(tableFile, currency)
+}
+
+private fun ensureGameval(root: Path, relativeFile: String, type: RSCMType, key: String) {
+    val file = root.resolve(relativeFile)
+    Files.createDirectories(file.parent)
+    if (existingGameval(file, key) != null) {
+        return
+    }
+    if (gamevalExists(root, type, key)) {
+        return
+    }
+    val value = if (type == RSCMType.INV) nextLowGamevalId(root, type) else -1
+    val prefix =
+        if (Files.exists(file) && Files.size(file) > 0L && !Files.readString(file).endsWith("\n")) {
+            "\n"
+        } else {
+            ""
+        }
+    Files.writeString(file, prefix + "$key=$value\n", java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND)
+}
+
+private fun gamevalExists(root: Path, type: RSCMType, key: String): Boolean {
+    val rootPrefix = root.toAbsolutePath().normalize().toString().replace('\\', '/') + "/"
+    val provider = GameValProvider.loadIsolated(rootPrefix, autoAssignIds = false)
+    return "${type.prefix}.$key" in provider.mappings[type.prefix].orEmpty()
+}
+
+private fun nextLowGamevalId(root: Path, type: RSCMType): Int {
+    val rootPrefix = root.toAbsolutePath().normalize().toString().replace('\\', '/') + "/"
+    val provider = GameValProvider.loadIsolated(rootPrefix, autoAssignIds = false)
+    val used = provider.mappings[type.prefix]?.values.orEmpty().toSet()
+    val floor = max((provider.maxBaseID[type.prefix] ?: -1) + 1, 0)
+    return (floor..MAX_GAMEVAL_ID).firstOrNull { it !in used }
+        ?: error("No free ${type.prefix} gameval IDs are available.")
+}
+
+private fun ensureShopCurrencyTableRow(file: Path, currency: CurrencyOption) {
+    require(currency.objInternal != null || currency.varbitInternal != null) {
+        "Currency ${currency.internal} must have an item or varbit backing."
+    }
+    val text = Files.readString(file)
+    if (currency.internal in text || currency.dbrowInternal in text) {
+        return
+    }
+    val index = shopCurrencyInsertIndex(text)
+    val row =
+        buildString {
+            appendLine()
+            appendLine("        row(${currency.dbrowInternal.kotlinString()}) {")
+            appendLine("            column(KEY, ${currency.internal.kotlinString()})")
+            appendLine("            column(SINGULAR_NAME, ${currency.singularName.kotlinString()})")
+            appendLine("            column(PLURAL_NAME, ${currency.pluralName.kotlinString()})")
+            if (currency.objInternal != null) {
+                appendLine("            columnRSCM(OBJ, ${currency.objInternal.kotlinString()})")
+            } else {
+                appendLine("            columnRSCM(VARBIT, ${currency.varbitInternal!!.kotlinString()})")
+            }
+            appendLine("        }")
+        }
+    Files.writeString(file, text.substring(0, index) + row + text.substring(index))
+}
+
+private fun validateShopCurrencyTableTarget(file: Path, currency: CurrencyOption) {
+    val text = Files.readString(file)
+    if (currency.internal in text || currency.dbrowInternal in text) {
+        return
+    }
+    shopCurrencyInsertIndex(text)
+}
+
+private fun shopCurrencyInsertIndex(text: String): Int {
+    val endOfDbTable = Regex("""(?m)^[ \t]{4}\}[ \t]*\R\}""")
+        .findAll(text)
+        .lastOrNull()
+        ?.range
+        ?.first
+    require(endOfDbTable != null) {
+        "Could not find the end of ShopCurrencyTable.shopCurrencies()."
+    }
+    return endOfDbTable
 }
 
 private fun findRawShopFile(root: Path, invInternal: String): Path? {
@@ -1167,64 +1475,181 @@ private fun loadSpawnedNpcRegions(root: Path): Map<String, Set<String>> {
 
 private fun loadRawShopIndex(root: Path): RawShopIndex {
     val dir = root.resolve(RAW_SHOPS_DIR)
-    if (!Files.isDirectory(dir)) {
-        return RawShopIndex(emptyMap())
-    }
-    val shops =
-        Files.walk(dir).use { paths ->
-            paths.iterator().asSequence()
-                .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".toml") }
-                .flatMap { file -> inventoryBlocks(Files.readString(file)).asSequence() }
-                .mapNotNull(::parseShopInventoryInfo)
-                .associateBy { it.internal }
-    }
-    return RawShopIndex(shops)
+    val rawShops =
+        if (Files.isDirectory(dir)) {
+            Files.walk(dir).use { paths ->
+                paths.iterator().asSequence()
+                    .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".toml") }
+                    .flatMap { file -> inventoryBlocks(Files.readString(file)).asSequence() }
+                    .mapNotNull(::parseShopInventoryInfo)
+                    .associateBy { it.internal }
+            }
+        } else {
+            emptyMap()
+        }
+    val cacheShops =
+        loadCacheShopInventories(root, rawShops.keys)
+            .associateBy { it.internal }
+    return RawShopIndex(cacheShops + rawShops)
 }
 
-private fun loadCurrencyOptions(root: Path): List<CurrencyOption> {
-    val known =
-        listOf(
-            CurrencyOption.StandardGp,
-            CurrencyOption("currency.tokkul", "Tokkul", "obj.tzhaar_token"),
-            CurrencyOption("currency.trading_sticks", "Trading sticks", "obj.village_trade_sticks"),
-            CurrencyOption("currency.numulite", "Numulite", "obj.fossil_numulite"),
-            CurrencyOption("currency.warrior_guild_token", "Warrior Guild tokens", "obj.warguild_tokens"),
-            CurrencyOption("currency.castle_wars_ticket", "Castle Wars tickets", "obj.castlewars_ticket"),
-            CurrencyOption("currency.mark_of_grace", "Marks of grace", "obj.grace"),
-            CurrencyOption("currency.golden_nugget", "Golden nuggets", "obj.motherlode_nugget"),
-            CurrencyOption("currency.abyssal_pearl", "Abyssal pearls", "obj.abyssal_pearl"),
-            CurrencyOption("currency.molch_pearl", "Molch pearls", "obj.aerial_fishing_pearl"),
-            CurrencyOption("currency.stardust", "Stardust", "obj.star_dust"),
-            CurrencyOption("currency.barronite_shard", "Barronite shards", "obj.camdozaal_barronite_shard"),
-            CurrencyOption("currency.ancient_essence", "Ancient essence", "obj.ancient_essence"),
-            CurrencyOption("currency.termite", "Termites", "obj.varlamore_wyrm_agility_termite"),
-            CurrencyOption("currency.ecto_token", "Ecto-tokens", "obj.ectotoken"),
-            CurrencyOption("currency.agility_arena_ticket", "Agility arena tickets", "obj.agilityarena_ticket"),
-            CurrencyOption("currency.brimhaven_voucher", "Brimhaven vouchers", "obj.agilityarena_voucher"),
-            CurrencyOption("currency.blood_money", "Blood money", "obj.deadman_coins"),
-            CurrencyOption("currency.platinum_token", "Platinum tokens", "obj.platinum"),
-            CurrencyOption("currency.chaos_rune", "Chaos runes", "obj.chaosrune"),
+private fun loadCacheShopInventories(root: Path, rawShopInternals: Set<String>): List<ShopInventoryInfo> {
+    val rootPrefix = root.toAbsolutePath().normalize().toString().replace('\\', '/') + "/"
+    val provider = GameValProvider.loadIsolated(rootPrefix, autoAssignIds = false)
+    val localInvInternals = localGamevalInternals(root.resolve(INV_GAMEVALS), RSCMType.INV.prefix)
+    return provider.mappings[RSCMType.INV.prefix].orEmpty()
+        .asSequence()
+        .filter { (internal, _) -> internal !in rawShopInternals }
+        .filter { (internal, _) -> internal !in localInvInternals }
+        .mapNotNull { (internal, id) ->
+            ServerCacheManager.getInventory(id)
+                ?.takeIf { it.isLikelyNativeShopInventory(internal) }
+                ?.toShopInventoryInfo(internal)
+        }
+        .toList()
+}
+
+private fun InventoryServerType.isLikelyNativeShopInventory(internal: String): Boolean {
+    val key = shopSearchKey(internal)
+    return size in 1..MAX_NATIVE_SHOP_SIZE &&
+        (
+            "shop" in key ||
+                scope == InvScope.Shared && stock.isNotEmpty()
         )
-    val byInternal = known.associateBy { it.internal }.toMutableMap()
-    val file = root.resolve(CURRENCY_GAMEVALS)
-    if (Files.exists(file)) {
-        Files.readAllLines(file)
-            .asSequence()
-            .map { line -> line.substringBefore('#').trim() }
-            .mapNotNull { line -> line.substringBefore('=', "").trim().takeIf { it.isNotBlank() } }
-            .map { key -> "currency.$key" }
-            .forEach { internal ->
-                byInternal.putIfAbsent(
-                    internal,
-                    CurrencyOption(internal = internal, label = internal.removePrefix("currency.").humanizedName()),
-                )
+}
+
+private fun InventoryServerType.toShopInventoryInfo(internal: String): ShopInventoryInfo =
+    ShopInventoryInfo(
+        internal = internal,
+        title = internal.removePrefix("inv.").humanizedName(),
+        buyMultiplier = CACHE_SHOP_DEFAULT_BUY_MULTIPLIER,
+        sellMultiplier = CACHE_SHOP_DEFAULT_SELL_MULTIPLIER,
+        changeDelta = CACHE_SHOP_DEFAULT_CHANGE_DELTA,
+        stock = stock.map { entry ->
+            RawStockEntry(
+                itemInternal = safeReverseMapping(RSCMType.OBJ, entry.obj),
+                count = entry.count,
+                restockCycles = entry.restockCycles,
+            )
+        },
+    )
+
+private fun localGamevalInternals(file: Path, prefix: String): Set<String> {
+    if (!Files.exists(file)) {
+        return emptySet()
+    }
+    val assignment = Regex("""^\s*([A-Za-z0-9_]+)\s*=""")
+    return Files.readAllLines(file)
+        .asSequence()
+        .mapNotNull { line -> assignment.find(line)?.groupValues?.get(1) }
+        .map { key -> "$prefix.$key" }
+        .toSet()
+}
+
+private fun isRealCacheShopInventory(root: Path, invInternal: String): Boolean {
+    if (invInternal in localGamevalInternals(root.resolve(INV_GAMEVALS), RSCMType.INV.prefix)) {
+        return false
+    }
+    val id = runCatching { RSCM.getRSCM(invInternal) }.getOrNull() ?: return false
+    return ServerCacheManager.getInventory(id)?.isLikelyNativeShopInventory(invInternal) == true
+}
+
+private fun loadCurrencyOptions(root: Path, items: List<LookupEntry>): List<CurrencyOption> {
+    val registered = loadRegisteredCurrencyOptions(root)
+    val byInternal = registered.associateBy { it.internal }.toMutableMap()
+    knownCurrencySeeds(items).forEach { seed ->
+        if (seed.internal !in byInternal) {
+            resolveCurrencyObj(seed, items)?.let { objInternal ->
+                byInternal[seed.internal] =
+                    CurrencyOption(
+                        internal = seed.internal,
+                        label = seed.label,
+                        objInternal = objInternal,
+                        singularName = seed.singularName,
+                        pluralName = seed.pluralName,
+                        registered = false,
+                    )
             }
+        }
     }
     return byInternal.values.sortedWith(
         compareBy<CurrencyOption> { !it.isStandard }
+            .thenBy { it.needsRegistration }
             .thenBy { it.label.lowercase() },
     )
 }
+
+private fun loadRegisteredCurrencyOptions(root: Path): List<CurrencyOption> {
+    val table = root.resolve(SHOP_CURRENCY_TABLE_FILE)
+    if (!Files.exists(table)) {
+        return listOf(CurrencyOption.StandardGp)
+    }
+    val rowPattern = Regex("""(?s)row\("dbrow\.shop_currency_[^"]+"\)\s*\{(.*?)\n\s*}""")
+    val keyPattern = Regex("""column\(KEY,\s*"([^"]+)"""")
+    val singularPattern = Regex("""column\(SINGULAR_NAME,\s*"([^"]+)"""")
+    val pluralPattern = Regex("""column\(PLURAL_NAME,\s*"([^"]+)"""")
+    val objPattern = Regex("""columnRSCM\(OBJ,\s*"([^"]+)"""")
+    val varbitPattern = Regex("""columnRSCM\(VARBIT,\s*"([^"]+)"""")
+    val rows =
+        rowPattern.findAll(Files.readString(table))
+            .mapNotNull { row ->
+                val block = row.groupValues[1]
+                val internal = keyPattern.find(block)?.groupValues?.get(1) ?: return@mapNotNull null
+                val singular = singularPattern.find(block)?.groupValues?.get(1) ?: internal.removePrefix("currency.")
+                val plural = pluralPattern.find(block)?.groupValues?.get(1) ?: singular
+                val objInternal = objPattern.find(block)?.groupValues?.get(1)
+                val varbitInternal = varbitPattern.find(block)?.groupValues?.get(1)
+                CurrencyOption(
+                    internal = internal,
+                    label = if (internal == CurrencyOption.StandardGp.internal) {
+                        CurrencyOption.StandardGp.label
+                    } else {
+                        plural.humanizedName()
+                    },
+                    objInternal = objInternal,
+                    varbitInternal = varbitInternal,
+                    singularName = singular,
+                    pluralName = plural,
+                    registered = true,
+                )
+            }
+            .toList()
+    return (rows + CurrencyOption.StandardGp).distinctBy { it.internal }
+}
+
+private fun knownCurrencySeeds(items: List<LookupEntry>): List<KnownCurrencySeed> =
+    listOf(
+        KnownCurrencySeed("tokkul", "Tokkul", "tokkul", "tokkul", listOf("obj.tokkul", "obj.tzhaar_token")),
+        KnownCurrencySeed("trading_sticks", "Trading sticks", "trading stick", "trading sticks", listOf("obj.trading_sticks", "obj.village_trade_sticks")),
+        KnownCurrencySeed("numulite", "Numulite", "numulite", "numulite", listOf("obj.numulite", "obj.fossil_numulite")),
+        KnownCurrencySeed("warrior_guild_token", "Warrior Guild tokens", "Warrior Guild token", "Warrior Guild tokens", listOf("obj.warrior_guild_token", "obj.warguild_tokens")),
+        KnownCurrencySeed("castle_wars_ticket", "Castle Wars tickets", "Castle Wars ticket", "Castle Wars tickets", listOf("obj.castle_wars_ticket", "obj.castlewars_ticket")),
+        KnownCurrencySeed("mark_of_grace", "Marks of grace", "mark of grace", "marks of grace", listOf("obj.mark_of_grace", "obj.grace")),
+        KnownCurrencySeed("golden_nugget", "Golden nuggets", "golden nugget", "golden nuggets", listOf("obj.golden_nugget", "obj.motherlode_nugget")),
+        KnownCurrencySeed("abyssal_pearl", "Abyssal pearls", "abyssal pearl", "abyssal pearls", listOf("obj.abyssal_pearl")),
+        KnownCurrencySeed("molch_pearl", "Molch pearls", "molch pearl", "molch pearls", listOf("obj.molch_pearl", "obj.aerial_fishing_pearl")),
+        KnownCurrencySeed("stardust", "Stardust", "stardust", "stardust", listOf("obj.star_dust")),
+        KnownCurrencySeed("barronite_shard", "Barronite shards", "Barronite shard", "Barronite shards", listOf("obj.barronite_shard", "obj.barronite_shards", "obj.camdozaal_barronite_shard")),
+        KnownCurrencySeed("ancient_essence", "Ancient essence", "ancient essence", "ancient essence", listOf("obj.ancient_essence")),
+        KnownCurrencySeed("termite", "Termites", "termite", "termites", listOf("obj.termite", "obj.varlamore_wyrm_agility_termite")),
+        KnownCurrencySeed("ecto_token", "Ecto-tokens", "ecto-token", "ecto-tokens", listOf("obj.ecto_token", "obj.ectotoken")),
+        KnownCurrencySeed("agility_arena_ticket", "Agility arena tickets", "Agility arena ticket", "Agility arena tickets", listOf("obj.agility_arena_ticket", "obj.agilityarena_ticket")),
+        KnownCurrencySeed("brimhaven_voucher", "Brimhaven vouchers", "Brimhaven voucher", "Brimhaven vouchers", listOf("obj.brimhaven_voucher", "obj.agilityarena_voucher")),
+        KnownCurrencySeed("blood_money", "Blood money", "blood money", "blood money", listOf("obj.blood_money", "obj.deadman_coins")),
+        KnownCurrencySeed("platinum_token", "Platinum tokens", "platinum token", "platinum tokens", listOf("obj.platinum_token", "obj.platinum")),
+        KnownCurrencySeed("chaos_rune", "Chaos runes", "chaos rune", "chaos runes", listOf("obj.chaosrune", "obj.chaos_rune")),
+    ).filter { seed ->
+        resolveCurrencyObj(seed, items) != null
+    }
+
+private fun resolveCurrencyObj(seed: KnownCurrencySeed, items: List<LookupEntry>): String? {
+    seed.objCandidates.firstOrNull(::canResolveObj)?.let { return it }
+    val nameKeys = setOf(seed.label, seed.singularName, seed.pluralName).map(::shopSearchKey).toSet()
+    return items.firstOrNull { item -> shopSearchKey(item.name) in nameKeys }?.internal
+}
+
+private fun canResolveObj(internal: String): Boolean =
+    runCatching { RSCM.getRSCM(internal) }.isSuccess
 
 private fun inventoryBlocks(text: String): List<String> {
     val pattern = Regex("""(?s)\[\[inventory]](.*?)(?=\R\[\[inventory]]|\z)""")
@@ -1269,6 +1694,7 @@ private fun loadScriptedNpcIndex(root: Path, rawShopIndex: RawShopIndex): Script
     val npcPattern = Regex("""onOpNpc(\d)\s*\(\s*"([^"]+)"""")
     val shopOpenPattern =
         Regex("""shops\.open\s*\((?s:.*?)"[^"]+"\s*,\s*"(inv\.[^"]+)"""")
+    val namedShopInvPattern = Regex("""shopInv\s*=\s*"(inv\.[^"]+)"""")
     val invLiteralPattern = Regex(""""(inv\.[^"]+)"""")
     val currencyPattern = Regex("""currency\s*=\s*"([^"]+)"""")
     Files.walk(contentDir).use { paths ->
@@ -1287,7 +1713,11 @@ private fun loadScriptedNpcIndex(root: Path, rawShopIndex: RawShopIndex): Script
                         .toList()
                 opPatterns += npcOps
                 val npcs = npcOps.map { it.npcPattern }.toSet()
-                val directShopInvs = shopOpenPattern.findAll(text).map { it.groupValues[1] }.toSet()
+                val directShopInvs =
+                    (
+                        shopOpenPattern.findAll(text).map { it.groupValues[1] } +
+                            namedShopInvPattern.findAll(text).map { it.groupValues[1] }
+                    ).toSet()
                 val shopInvs =
                     if (directShopInvs.isNotEmpty()) {
                         directShopInvs
@@ -1461,7 +1891,86 @@ private fun ItemServerType.toLookupEntry(): LookupEntry? {
     )
 }
 
-private fun ensureShopMakerCompatibility(repoRoot: Path): Boolean = true
+private fun ensureShopMakerCompatibility(repoRoot: Path): Boolean {
+    return try {
+        ensureInventoryOverlaySupport(repoRoot)
+        true
+    } catch (e: Exception) {
+        JOptionPane.showMessageDialog(
+            null,
+            "Shop Manager needs native inventory overlay support, but the OpenRune file " +
+                "does not match the expected layout.\n\nNo files were changed.\n\n${e.message}",
+            "Shop Manager",
+            JOptionPane.ERROR_MESSAGE,
+        )
+        false
+    }
+}
+
+private fun ensureInventoryOverlaySupport(repoRoot: Path) {
+    val file = repoRoot.resolve(INVENTORY_CODEC_FILE)
+    if (!Files.exists(file)) {
+        return
+    }
+    val original = Files.readString(file)
+    val normalized = original.replace("\r\n", "\n")
+    if ("customData.size != InventoryServerType().size" in normalized) {
+        return
+    }
+    val safeSizeOverlay =
+        listOf(
+            "            if (inventoryType == null || customData.size != InventoryServerType().size) {",
+            "                size = customData.size",
+            "            }",
+        ).joinToString("\n")
+    if ("            size = customData.size" in normalized) {
+        val patched = normalized.replace("            size = customData.size", safeSizeOverlay)
+        val newline = if ("\r\n" in original) "\r\n" else "\n"
+        Files.writeString(file, patched.replace("\n", newline))
+        return
+    }
+
+    val headerPattern =
+        Regex(
+            """(?m)^        val inventoryType = types\[id] \?: return\R""" +
+                """        size = inventoryType\.size\R""" +
+                """        val customData = custom\?\.get\(id\)""",
+        )
+    val withOverlayOnlyHeader =
+        headerPattern.replace(normalized) {
+            listOf(
+                "        val customData = custom?.get(id)",
+                "        val inventoryType = types[id]",
+                "",
+                "        if (inventoryType != null) {",
+                "            size = inventoryType.size",
+                "        }",
+            ).joinToString("\n")
+        }
+    require(withOverlayOnlyHeader != normalized) {
+        "Could not find InventoryServerCodec's base inventory lookup block."
+    }
+
+    val customPattern =
+        Regex(
+            """(?m)^        if \(customData != null\) \{\R""" +
+                """            scope = customData\.scope""",
+        )
+    val patched =
+        customPattern.replace(withOverlayOnlyHeader) {
+            listOf(
+                "        if (customData != null) {",
+                safeSizeOverlay,
+                "            scope = customData.scope",
+            ).joinToString("\n")
+        }
+    require(patched != withOverlayOnlyHeader) {
+        "Could not find InventoryServerCodec's custom inventory block."
+    }
+
+    val newline = if ("\r\n" in original) "\r\n" else "\n"
+    Files.writeString(file, patched.replace("\n", newline))
+}
 
 private fun ensureGradleDependency(file: Path, dependency: String) {
     val text = Files.readString(file)
@@ -1486,9 +1995,15 @@ private const val SHOPS_API_DEPENDENCY = "implementation(projects.api.shops)"
 private const val RAW_SHOPS_DIR = ".data/raw-cache/server/shops"
 private const val NATIVE_SHOP_SCRIPT_DIR =
     "content/generic/generic-npcs/src/main/kotlin/org/rsmod/content/generic/npcs/shops/generated"
+private const val INVENTORY_CODEC_FILE =
+    "or-cache/src/main/kotlin/dev/openrune/codec/osrs/impl/InventoryServerCodec.kt"
 private const val PARAM_GAMEVALS = ".data/gamevals/param.rscm"
+private const val INV_GAMEVALS = ".data/gamevals/inv.rscm"
 private const val CURRENCY_GAMEVALS = ".data/gamevals/currency.rscm"
+private const val DBROW_GAMEVALS = ".data/gamevals/dbrow.rscm"
+private const val SHOP_CURRENCY_TABLE_FILE = "or-cache/src/main/kotlin/dev/openrune/tables/ShopCurrencyTable.kt"
 private const val MAP_NPC_SPAWNS_DIR = ".data/raw-cache/map/npcs"
+private const val MAX_GAMEVAL_ID = 65535
 private const val ALL_REGIONS = "All regions"
 private const val SHOP_INVENTORY_PARAM_ID = 65525
 private const val SHOP_NAME_PARAM_ID = 65524
@@ -1496,6 +2011,11 @@ private const val SHOP_SELL_PERCENTAGE_PARAM_ID = 65497
 private const val SHOP_BUY_PERCENTAGE_PARAM_ID = 65498
 private const val SHOP_CHANGE_PERCENTAGE_PARAM_ID = 65499
 private const val DEFAULT_TRADE_SLOT = 3
+private const val PRICE_MULTIPLIER_MAX = 10_000_000
+private const val MAX_NATIVE_SHOP_SIZE = 28
+private const val CACHE_SHOP_DEFAULT_BUY_MULTIPLIER = 600
+private const val CACHE_SHOP_DEFAULT_SELL_MULTIPLIER = 1000
+private const val CACHE_SHOP_DEFAULT_CHANGE_DELTA = 20
 private val GENERIC_SHOP_MATCH_KEYS =
     setOf(
         "shop",

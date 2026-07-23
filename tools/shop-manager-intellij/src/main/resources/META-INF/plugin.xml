@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>org.rsmod.tools.shopmanager</id>
     <name>OpenRune Shop Manager</name>
-    <version>0.1.0</version>
+    <version>0.1.9</version>
     <vendor>CowKiller1337</vendor>
 
     <description><![CDATA[
