@@ -6,16 +6,17 @@ open the **OpenRune Shops** IntelliJ tool window instead of launching this modul
 The tool reads the built server cache, lets you pick an existing shop NPC, search cache items, and
 edit that shop's native stock.
 
-The tool lists spawned Trade NPCs that can be matched to real cache shop inventories. It changes the
-shop title, stock, and prices. If a real cache shop has no stock TOML yet, it creates the TOML
-overlay for that existing `inv.*` shop. If the NPC is missing a native Trade script, it writes a
-normal Aubury-style `PluginScript` for that NPC. It does not move the NPC, create a new NPC
-definition, or invent new shop inventory ids.
+The tool lists spawned Trade NPCs and real cache shop inventories. It changes the shop title, stock,
+and prices. If a Trade NPC has no matched shop yet, choose an existing real `inv.*` from **Shop
+inventory** and the tool can write a normal Aubury-style `PluginScript` for that NPC. If a real
+cache shop has no stock TOML yet, it creates the TOML overlay for that existing `inv.*` shop. It
+does not move the NPC, create a new NPC definition, or invent new shop inventory ids.
 
 Basic flow:
 
 - Pick an NPC and press **Load selected shop** to pull its current shop stock into the form.
-- If the NPC has more than one native shop inventory, choose the stock set from **Shop variant**.
+- Choose the stock set from **Shop inventory**. The dropdown shows whether that inventory is unused
+  or already used by other NPCs.
 - Choose **Currency** when the shop should use something other than coins. Registered currencies are
   used directly. Common item-backed currencies are registered through OpenRune's native
   `ShopCurrencyTable` setup when you save.
@@ -24,6 +25,7 @@ Basic flow:
   so that item costs the entered amount at normal stock.
 - Press **Preview** if you want to inspect the generated changes.
 - Press **Save / Fix shop** to write the native shop update.
+- If the selected shop inventory is shared with other NPCs, confirm the warning before saving.
 - Rebuild cache with `:or-cache:buildCache`, then restart the server.
 
 If an NPC already has a hand-written Trade script, the tool will not generate a duplicate Trade

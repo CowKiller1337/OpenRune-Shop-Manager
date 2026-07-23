@@ -96,7 +96,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private val preview = JTextArea()
     private val status = JLabel("Loading cache...")
 
-    private var lookup = LookupData(emptyList(), emptyList(), emptyList(), listOf(CurrencyOption.StandardGp))
+    private var lookup =
+        LookupData(emptyList(), emptyList(), emptyList(), emptyList(), listOf(CurrencyOption.StandardGp))
     private var updatingShopVariant = false
     private var activeNpcInternal: String? = null
     private var activeShopVariantInternal: String? = null
@@ -188,7 +189,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         var row = 0
         fields.addRow(row++, "Shop title", shopName)
         fields.addRow(row++, "Shop slug", shopSlug)
-        fields.addRow(row++, "Shop variant", shopVariant)
+        fields.addRow(row++, "Shop inventory", shopVariant)
         fields.addRow(row++, "Currency", shopCurrency)
         fields.addRow(row++, "Buy multiplier", buyMultiplier)
         fields.addRow(row++, "Sell multiplier", sellMultiplier)
@@ -254,11 +255,23 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                     .sortedWith(compareBy<LookupEntry> { it.name }.thenBy { it.id })
                 val currencies = loadCurrencyOptions(repoRoot, items)
                 val regions = spawnedNpcRegions.values.flatten().distinct().sorted()
-                return LookupData(
-                    npcs = ServerCacheManager.getNpcs().values
+                val npcs =
+                    ServerCacheManager.getNpcs().values
                         .mapNotNull {
                             it.toLookupEntry(spawnedNpcRegions, shopParams, rawShopIndex, scriptedNpcIndex)
                         }
+                val shopUsage = npcs.shopUsageByInventory()
+                val shopInventories =
+                    rawShopIndex.all()
+                        .map { it.withUsage(shopUsage) }
+                        .sortedWith(
+                            compareBy<ShopInventoryInfo> { it.usedBy.isNotEmpty() }
+                                .thenBy { it.title }
+                                .thenBy { it.internal },
+                        )
+                return LookupData(
+                    npcs = npcs
+                        .map { it.withShopUsage(shopUsage) }
                         .sortedWith(
                             compareBy<LookupEntry> { !it.isEditableShopNpc }
                                 .thenBy { !it.hasShopInventory }
@@ -267,6 +280,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                                 .thenBy { it.id },
                         ),
                     items = items,
+                    shopInventories = shopInventories,
                     regions = regions,
                     currencies = currencies,
                 )
@@ -406,10 +420,8 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         try {
             val selectedNpc = selectedNpcOrActive() ?: error("Pick a shop NPC first.")
             activeNpcInternal = selectedNpc.internal
-            val variants = selectedNpc.shopVariants
-            if (variants.isNotEmpty()) {
-                populateShopVariants(selectedNpc, activeShopVariantInternal)
-                val variant = (shopVariant.selectedItem as? ShopInventoryInfo) ?: variants.first()
+            val variant = populateShopVariants(selectedNpc, activeShopVariantInternal ?: selectedNpc.shopInventoryInternal)
+            if (variant != null) {
                 loadShopVariant(selectedNpc, variant)
                 return
             }
@@ -475,6 +487,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private fun loadShopVariant(selectedNpc: LookupEntry, variant: ShopInventoryInfo) {
         activeNpcInternal = selectedNpc.internal
         activeShopVariantInternal = variant.internal
+        val isNpcPrimaryShop = variant.internal == selectedNpc.shopInventoryInternal
         val stock =
             variant.stock.map { stock ->
                 StockEntry(
@@ -489,33 +502,39 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 npcInternal = selectedNpc.internal,
                 variantInternal = variant.internal,
                 currencyInternal = selectedNpc.shopCurrencyInternal,
-                title = variant.title,
+                title = if (isNpcPrimaryShop) selectedNpc.shopTitle ?: variant.title else variant.title,
                 slug = variant.internal.removePrefix("inv.").takeIf { it.isNotBlank() }
                     ?: variant.title.toSlug(),
-                buyMultiplier = variant.buyMultiplier,
-                sellMultiplier = variant.sellMultiplier,
-                changeDelta = variant.changeDelta,
+                buyMultiplier = if (isNpcPrimaryShop) selectedNpc.shopBuyMultiplier ?: variant.buyMultiplier else variant.buyMultiplier,
+                sellMultiplier = if (isNpcPrimaryShop) selectedNpc.shopSellMultiplier ?: variant.sellMultiplier else variant.sellMultiplier,
+                changeDelta = if (isNpcPrimaryShop) selectedNpc.shopChangeDelta ?: variant.changeDelta else variant.changeDelta,
                 stock = stock,
             ),
         )
     }
 
-    private fun populateShopVariants(selectedNpc: LookupEntry, selectedInternal: String? = null) {
+    private fun populateShopVariants(selectedNpc: LookupEntry, selectedInternal: String? = null): ShopInventoryInfo? {
         updatingShopVariant = true
-        try {
+        return try {
+            val choices = inventoryChoicesFor(selectedNpc)
             shopVariant.removeAllItems()
-            selectedNpc.shopVariants.forEach(shopVariant::addItem)
+            choices.forEach(shopVariant::addItem)
             val selected =
-                selectedNpc.shopVariants.firstOrNull { it.internal == selectedInternal }
-                    ?: selectedNpc.shopVariants.firstOrNull()
+                choices.firstOrNull { it.internal == selectedInternal }
+                    ?: choices.firstOrNull { it.internal == selectedNpc.shopInventoryInternal }
+                    ?: choices.firstOrNull()
             if (selected != null) {
                 shopVariant.selectedItem = selected
             }
-            shopVariant.isEnabled = selectedNpc.shopVariants.size > 1
+            shopVariant.isEnabled = choices.size > 1
+            selected
         } finally {
             updatingShopVariant = false
         }
     }
+
+    private fun inventoryChoicesFor(selectedNpc: LookupEntry): List<ShopInventoryInfo> =
+        selectedNpc.shopVariants.takeIf { it.isNotEmpty() } ?: lookup.shopInventories
 
     private fun applyLoadedShop(shop: LoadedShop) {
         activeNpcInternal = shop.npcInternal
@@ -537,7 +556,19 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         }
         preview.text = ""
         val variantText = shop.variantInternal?.let { " ($it)" } ?: ""
-        status.text = "Loaded ${shop.title}$variantText. Edit it, then save the changes."
+        val otherUsers =
+            shop.variantInternal
+                ?.let { internal -> lookup.shopInventories.firstOrNull { it.internal == internal } }
+                ?.usedBy
+                .orEmpty()
+                .filterNot { it.npcInternal == shop.npcInternal }
+        val sharedText =
+            if (otherUsers.isEmpty()) {
+                ""
+            } else {
+                " Shared with ${otherUsers.take(2).joinToString { it.npcName }}${if (otherUsers.size > 2) " +${otherUsers.size - 2}" else ""}."
+            }
+        status.text = "Loaded ${shop.title}$variantText. Edit it, then save the changes.$sharedText"
     }
 
     private fun previewShop() {
@@ -553,6 +584,10 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
     private fun placeShop() {
         try {
             val spec = readSpec()
+            if (!confirmSharedInventoryWrite(spec)) {
+                status.text = "Save cancelled."
+                return
+            }
             val generated = buildGeneratedFiles(spec)
             generated.write(repoRoot)
             applySavedShopToLookup(spec)
@@ -567,6 +602,30 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         }
     }
 
+    private fun confirmSharedInventoryWrite(spec: ShopSpec): Boolean {
+        val otherUsers =
+            lookup.shopInventories
+                .firstOrNull { it.internal == spec.rawShopInternal }
+                ?.usedBy
+                .orEmpty()
+                .filterNot { it.npcInternal == spec.npcInternal }
+        if (otherUsers.isEmpty()) {
+            return true
+        }
+        val previewUsers = otherUsers.take(5).joinToString(separator = "\n") { "- ${it.label}" }
+        val more = if (otherUsers.size > 5) "\n- and ${otherUsers.size - 5} more" else ""
+        val result =
+            JOptionPane.showConfirmDialog(
+                this,
+                "This shop inventory is already used by:\n\n$previewUsers$more\n\n" +
+                    "Saving will change stock for every NPC using ${spec.rawShopInternal}. Continue?",
+                "Shared shop inventory",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+            )
+        return result == JOptionPane.YES_OPTION
+    }
+
     private fun readSpec(): ShopSpec {
         val selectedNpc = selectedNpcOrActive()
             ?: error("Pick a shop NPC first.")
@@ -574,9 +633,10 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         require(selectedNpc.isEditableShopNpc) {
             "Only in-world Trade NPCs can be edited."
         }
+        val inventoryChoices = inventoryChoicesFor(selectedNpc)
         val selectedVariant =
             (shopVariant.selectedItem as? ShopInventoryInfo)
-                ?.takeIf { variant -> selectedNpc.shopVariants.any { it.internal == variant.internal } }
+                ?.takeIf { variant -> inventoryChoices.any { it.internal == variant.internal } }
         val selectedCurrency = shopCurrency.selectedItem as? CurrencyOption ?: CurrencyOption.StandardGp
         val slug = shopSlug.text.toSlug()
         require(slug.isNotBlank()) { "Shop slug cannot be empty." }
@@ -586,7 +646,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 ?: selectedNpc.scriptedShopInternal
                 ?: error(
                     "${selectedNpc.name} does not have a real cache shop inventory. " +
-                        "Custom invented inv.* ids open blank in the client.",
+                        "Choose an existing real inv.* shop from the Shop variant dropdown.",
                 )
         require(stockModel.rows.isNotEmpty()) { "Add at least one stock item." }
         require(stockModel.rows.size <= MAX_RENDER_STOCK_ROWS) {
@@ -599,6 +659,14 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
         val writesNativeScript =
             generatedScriptExists ||
                 (selectedNpc.scriptedShopInternal == null && !selectedNpc.hasNativeTradeScript)
+        val selectedInventoryAlreadyHandled =
+            selectedNpc.shopVariants.any { it.internal == rawShopInternal } ||
+                selectedNpc.shopInventoryInternal == rawShopInternal ||
+                selectedNpc.scriptedShopInternal == rawShopInternal
+        require(writesNativeScript || !selectedNpc.hasNativeTradeScript || selectedInventoryAlreadyHandled) {
+            "${selectedNpc.name} already has a hand-written Trade script, and the tool could not detect a shop " +
+                "inventory in that script. Add this inventory to that script manually, or remove the old handler first."
+        }
         val existingScriptAlreadyUsesCurrency =
             selectedNpc.hasNativeTradeScript && selectedNpc.shopCurrencyInternal == selectedCurrency.internal
         require(writesNativeScript || !selectedNpc.hasNativeTradeScript || existingScriptAlreadyUsesCurrency) {
@@ -636,6 +704,15 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                     restockCycles = stock.restockCycles,
                 )
             }
+        val selectedUsage = ShopUsage(npcName = spec.inheritedNpc.name, npcInternal = spec.npcInternal)
+        val savedUsage =
+            (
+                lookup.shopInventories
+                    .firstOrNull { it.internal == spec.rawShopInternal }
+                    ?.usedBy
+                    .orEmpty()
+                    .filterNot { it.npcInternal == selectedUsage.npcInternal } + selectedUsage
+            ).sortedBy { it.npcName }
         val savedShop =
             ShopInventoryInfo(
                 internal = spec.rawShopInternal,
@@ -644,14 +721,21 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                 sellMultiplier = spec.sellMultiplier,
                 changeDelta = spec.changeDelta,
                 stock = savedStock,
+                usedBy = savedUsage,
             )
+        val nextShopInventories =
+            (lookup.shopInventories.filterNot { it.internal == savedShop.internal } + savedShop)
+                .sortedWith(
+                    compareBy<ShopInventoryInfo> { it.usedBy.isNotEmpty() }
+                        .thenBy { it.title }
+                        .thenBy { it.internal },
+                )
         lookup =
             lookup.copy(
+                shopInventories = nextShopInventories,
                 npcs =
                     lookup.npcs.map { npc ->
-                        if (npc.internal != spec.npcInternal) {
-                            npc
-                        } else {
+                        if (npc.internal == spec.npcInternal) {
                             val variants =
                                 (npc.shopVariants.filterNot { it.internal == savedShop.internal } + savedShop)
                                     .distinctBy { it.internal }
@@ -668,6 +752,12 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
                                 scriptedShopInternal = npc.scriptedShopInternal ?: spec.rawShopInternal,
                                 hasNativeTradeScript = npc.hasNativeTradeScript || spec.writeNativeScript,
                             )
+                        } else {
+                            val variants =
+                                npc.shopVariants
+                                    .map { if (it.internal == savedShop.internal) savedShop else it }
+                                    .distinctBy { it.internal }
+                            if (variants == npc.shopVariants) npc else npc.copy(shopVariants = variants)
                         }
                     },
             )
@@ -698,6 +788,7 @@ class ShopMakerPanel(private val repoRoot: Path) : JPanel(BorderLayout(8, 8)) {
 private data class LookupData(
     val npcs: List<LookupEntry>,
     val items: List<LookupEntry>,
+    val shopInventories: List<ShopInventoryInfo>,
     val regions: List<String>,
     val currencies: List<CurrencyOption>,
 ) {
@@ -804,7 +895,7 @@ private data class LookupEntry(
         get() = canOpenShop && hasShopInventory && isSpawned
 
     val isEditableShopNpc: Boolean
-        get() = isSpawned && hasShopInventory && canOpenShop
+        get() = isSpawned && canOpenShop
 
     val tradeOpSlot: Int?
         get() =
@@ -833,9 +924,10 @@ private data class LookupEntry(
             val scriptText = if (!hasTrade && scriptedShopInternal != null) " | scripted shop" else ""
             val tradeScriptText = if (hasTrade && hasNativeTradeScript) " | native Trade script" else ""
             val variantText = if (shopVariants.size > 1) " | ${shopVariants.size} shop variants" else ""
+            val missingShopText = if (!hasShopInventory) " | choose inv.*" else ""
             val regionText = if (regionLabel.isBlank()) "" else " | $regionLabel"
             val costText = if (cost > 0) " | ${cost}gp" else ""
-            return "$name [$id] $internal$regionText$actionText$scriptText$tradeScriptText$variantText$costText"
+            return "$name [$id] $internal$regionText$actionText$scriptText$tradeScriptText$variantText$missingShopText$costText"
         }
 
     fun matches(query: String): Boolean {
@@ -866,6 +958,13 @@ private data class RawStockEntry(
     val restockCycles: Int,
 )
 
+private data class ShopUsage(
+    val npcName: String,
+    val npcInternal: String,
+) {
+    val label: String get() = "$npcName [$npcInternal]"
+}
+
 private data class ShopInventoryInfo(
     val internal: String,
     val title: String,
@@ -873,8 +972,17 @@ private data class ShopInventoryInfo(
     val sellMultiplier: Int,
     val changeDelta: Int,
     val stock: List<RawStockEntry>,
+    val usedBy: List<ShopUsage> = emptyList(),
 ) {
-    override fun toString(): String = "$title ($internal)"
+    private val usedByText: String
+        get() =
+            when {
+                usedBy.isEmpty() -> "unused"
+                usedBy.size == 1 -> "used by ${usedBy.single().npcName}"
+                else -> "used by ${usedBy.take(2).joinToString { it.npcName }} +${usedBy.size - 2}"
+            }
+
+    override fun toString(): String = "$title ($internal) - $usedByText"
 }
 
 private data class ScriptedNpcIndex(
@@ -919,6 +1027,8 @@ private data class RawShopIndex(
 
     fun byInternal(internal: String?): ShopInventoryInfo? =
         internal?.let { byInternal[it] }
+
+    fun all(): List<ShopInventoryInfo> = shops
 
     fun matchNpc(name: String, internal: String, regions: Set<String>): ShopInventoryInfo? {
         val npcKey = internal.removePrefix("npc.")
@@ -968,6 +1078,36 @@ private data class RawShopIndex(
             .firstOrNull()
     }
 }
+
+private fun List<LookupEntry>.shopUsageByInventory(): Map<String, List<ShopUsage>> {
+    val usageByInventory = linkedMapOf<String, MutableList<ShopUsage>>()
+    for (npc in this) {
+        if (!npc.isSpawned) {
+            continue
+        }
+        val inventories = linkedSetOf<String>()
+        npc.shopInventoryInternal?.let(inventories::add)
+        npc.scriptedShopInternal?.let(inventories::add)
+        npc.shopVariants.forEach { inventories += it.internal }
+        if (inventories.isEmpty()) {
+            continue
+        }
+        val usage = ShopUsage(npcName = npc.name, npcInternal = npc.internal)
+        inventories.forEach { inventory ->
+            val usages = usageByInventory.getOrPut(inventory) { mutableListOf() }
+            if (usages.none { it.npcInternal == usage.npcInternal }) {
+                usages += usage
+            }
+        }
+    }
+    return usageByInventory.mapValues { (_, usages) -> usages.sortedBy { it.npcName } }
+}
+
+private fun ShopInventoryInfo.withUsage(usageByInventory: Map<String, List<ShopUsage>>): ShopInventoryInfo =
+    copy(usedBy = usageByInventory[internal].orEmpty())
+
+private fun LookupEntry.withShopUsage(usageByInventory: Map<String, List<ShopUsage>>): LookupEntry =
+    copy(shopVariants = shopVariants.map { it.withUsage(usageByInventory) })
 
 private data class LoadedShop(
     val label: String,

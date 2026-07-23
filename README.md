@@ -12,6 +12,8 @@ hand. It is designed as a drop-in IntelliJ plugin source module for an OpenRune 
 - Recreate existing in-world shops without moving the NPC.
 - Repair missing existing-shop Trade scripts with normal Aubury-style OpenRune code.
 - Load the stock from a selected existing shop NPC.
+- Attach a Trade NPC with no matched shop to an existing real cache shop inventory.
+- Show whether a shop inventory is unused or already used by other NPCs before saving.
 - Edit native shop variants on one NPC, such as base, skillcape, or trimmed skillcape stock.
 - Set a selected item's target shop price by adjusting the native shop sell multiplier.
 - Select native OpenRune shop currencies, including already registered currencies and common
@@ -79,15 +81,17 @@ restart the IDE once more.
 ## How To Use
 
 Use the tool when you want to change a shop NPC that already exists in the world. It changes the
-shop title, prices, and stock. If a real cache shop has no stock TOML yet, the tool creates the TOML
-overlay for that existing `inv.*` shop. If the selected NPC has no native Trade script, the tool
-also writes a normal Aubury-style `PluginScript` that calls `shops.open(...)`. It does not move the
-NPC, create new NPC definitions, or invent new shop inventory ids.
+shop title, prices, and stock. If a Trade NPC has no matched shop yet, choose an existing real
+`inv.*` from **Shop inventory** and the tool can write a normal Aubury-style `PluginScript` that
+calls `shops.open(...)`. If a real cache shop has no stock TOML yet, the tool creates the TOML
+overlay for that existing `inv.*` shop. It does not move the NPC, create new NPC definitions, or
+invent new shop inventory ids.
 
 Basic flow:
 
 - Pick an NPC and press **Load selected shop** to pull its current stock into the form.
-- If the NPC has more than one native shop inventory, choose the stock set from **Shop variant**.
+- Choose the stock set from **Shop inventory**. The dropdown shows whether that inventory is unused
+  or already used by other NPCs.
 - Choose **Currency** when the shop should use something other than coins. Registered currencies are
   used directly. Common item-backed currencies are registered through OpenRune's native
   `ShopCurrencyTable` setup when you save.
@@ -96,6 +100,7 @@ Basic flow:
   so that item costs the entered amount at normal stock.
 - Press **Preview** if you want to inspect the generated changes.
 - Press **Save / Fix shop** to write the native shop update.
+- If the selected shop inventory is shared with other NPCs, confirm the warning before saving.
 - Rebuild cache with `:or-cache:buildCache`, then restart the server.
 
 If an NPC already has a hand-written Trade script, the tool will not create a second Trade handler.
